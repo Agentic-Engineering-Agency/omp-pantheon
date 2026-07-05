@@ -1,4 +1,4 @@
-import Type from "typebox";
+import { Type } from "typebox";
 
 export const EVAL_CONFIG_SCHEMA_VERSION = "evalfly.config.v1" as const;
 export const EVAL_CASE_SCHEMA_VERSION = "evalfly.case.v1" as const;
