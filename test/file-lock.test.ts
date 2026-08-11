@@ -11,6 +11,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { Database } from "bun:sqlite";
+
 import { acquireFileLock } from "../extensions/oh-my-omp/file-lock";
 
 const roots: string[] = [];
@@ -68,5 +70,41 @@ describe("acquireFileLock", () => {
 
 		await expect(acquireFileLock(lockPath)).rejects.toThrow("symbolic link");
 		expect(await readFile(outside, "utf8")).toBe("sentinel");
+	});
+
+	test("rejects symbolic-link SQLite sidecars before opening a WAL guard", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pantheon-file-lock-"));
+		roots.push(root);
+		const lockPath = join(root, "state.lock");
+		const guardPath = `${lockPath}.guard.sqlite`;
+		const database = new Database(guardPath, { create: true });
+		database.exec("PRAGMA journal_mode = WAL");
+		database.close();
+		const outside = join(root, "outside-wal");
+		await writeFile(outside, "sentinel");
+		await symlink(outside, `${guardPath}-wal`);
+
+		await expect(acquireFileLock(lockPath)).rejects.toThrow("sidecar");
+		expect(await readFile(outside, "utf8")).toBe("sentinel");
+	});
+
+	test("normalizes an existing WAL guard to DELETE journaling", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pantheon-file-lock-"));
+		roots.push(root);
+		const lockPath = join(root, "state.lock");
+		const guardPath = `${lockPath}.guard.sqlite`;
+		const database = new Database(guardPath, { create: true });
+		database.exec("PRAGMA journal_mode = WAL");
+		database.close();
+
+		const release = await acquireFileLock(lockPath);
+		await release();
+		const inspected = new Database(guardPath, { readonly: true });
+		const journalMode = inspected.query("PRAGMA journal_mode").get() as {
+			journal_mode: string;
+		};
+		inspected.close();
+
+		expect(journalMode.journal_mode).toBe("delete");
 	});
 });

@@ -44,18 +44,33 @@ function databaseIsLocked(error: unknown): boolean {
 	);
 }
 
-async function assertGuardDatabasePath(path: string): Promise<void> {
+const SQLITE_GUARD_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
+
+async function assertRegularSqlitePath(
+	path: string,
+	label: string,
+): Promise<void> {
 	try {
 		const metadata = await lstat(path);
 		if (metadata.isSymbolicLink()) {
-			throw new FileLockError(`Refusing symbolic link SQLite guard: ${path}`);
+			throw new FileLockError(`Refusing symbolic link SQLite ${label}: ${path}`);
 		}
-		if (!metadata.isFile()) {
-			throw new FileLockError(`SQLite guard must be a regular file: ${path}`);
+		if (!metadata.isFile() || metadata.nlink !== 1) {
+			throw new FileLockError(
+				`SQLite ${label} must be a singly linked regular file: ${path}`,
+			);
 		}
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
 		throw error;
+	}
+}
+
+
+async function assertGuardDatabasePath(path: string): Promise<void> {
+	await assertRegularSqlitePath(path, "guard");
+	for (const suffix of SQLITE_GUARD_SIDECAR_SUFFIXES) {
+		await assertRegularSqlitePath(`${path}${suffix}`, "guard sidecar");
 	}
 }
 
@@ -75,6 +90,15 @@ async function acquireGuard(path: string): Promise<Database | null> {
 		strict: true,
 	});
 	try {
+		await assertGuardDatabasePath(guardPath);
+		const journalMode = database
+			.query("PRAGMA journal_mode = DELETE")
+			.get() as { journal_mode?: unknown } | null;
+		if (journalMode?.journal_mode !== "delete") {
+			throw new FileLockError(
+				`SQLite guard refused DELETE journal mode: ${guardPath}`,
+			);
+		}
 		await assertGuardDatabasePath(guardPath);
 		database.exec("PRAGMA busy_timeout = 0");
 		database.exec("BEGIN IMMEDIATE");
