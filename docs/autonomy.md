@@ -23,7 +23,7 @@ No global daemon is installed. Starting an autonomy run asks OMP's launch broker
 /autonomy explain
 ```
 
-`start` creates a new run, freezes the host verification command (default: `bun test`), and starts the resident worker. A terminal run may be followed by another run; journal revisions remain contiguous. `pause` stops the run-scoped worker before persisting the paused state, and verification is rejected while paused. `resume` restarts the worker and preserves/coalesces queued continuation work. `cancel` is terminal and stops the worker. `status` reports the run, attempt, artifact revision, gates, and broker worker state.
+`start` creates a new run, freezes the host verification command (default: `bun test`), and starts the resident worker. A terminal run may be followed by another run; journal revisions remain contiguous. `pause` persists the paused state only after the run-scoped worker reports a terminal stop (`stopped` or `exited`), and verification is rejected while paused. Mutating tool results observed while paused still advance the artifact revision and reset every gate without resuming execution. `resume` restarts the worker and preserves/coalesces equivalent queued continuation work; every invalidated gate requires fresh evidence. `cancel` is terminal and stops the worker. `status` reports the run, attempt, artifact revision, gates, and broker worker state.
 
 ## Completion contract
 

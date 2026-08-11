@@ -34,6 +34,8 @@ const ACTIVE_STATUSES: Partial<Record<AutonomyRun["status"], true>> = {
 	waiting: true,
 };
 
+const TERMINAL_WORKER_STATES = new Set(["exited", "stopped"]);
+
 export interface VerificationReceipt {
 	status: "pass" | "fail";
 	evidence: string;
@@ -172,7 +174,14 @@ export class AutonomyRuntime {
 		if (ACTIVE_STATUSES[state.status] !== true && state.status !== "paused") {
 			return controller.pause();
 		}
-		await this.agentd?.stop(state.id);
+		if (this.agentd !== null) {
+			const worker = await this.agentd.stop(state.id);
+			if (!TERMINAL_WORKER_STATES.has(worker.state)) {
+				throw new AutonomyTransitionError(
+					`Autonomy worker stop is not terminal: ${worker.state}`,
+				);
+			}
+		}
 		return controller.pause();
 	}
 
@@ -267,7 +276,12 @@ export class AutonomyRuntime {
 		}
 		const controller = await this.requireController();
 		const state = await controller.get();
-		if (state === null || ACTIVE_STATUSES[state.status] !== true) return;
+		if (
+			state === null ||
+			(ACTIVE_STATUSES[state.status] !== true && state.status !== "paused")
+		) {
+			return;
+		}
 		const evidence = createHash("sha256")
 			.update(
 				JSON.stringify({

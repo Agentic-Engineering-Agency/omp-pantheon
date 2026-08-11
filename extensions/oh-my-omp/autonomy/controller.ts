@@ -247,7 +247,7 @@ export class AutonomyController {
 		const artifactRevision = state.artifactRevision + 1;
 		return this.persist({
 			...state,
-			status: "running",
+			status: state.status === "paused" ? "paused" : "running",
 			artifactRevision,
 			artifactHash: artifactHash.trim(),
 			gates: state.gates.map((gate) =>

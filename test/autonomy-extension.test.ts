@@ -741,6 +741,147 @@ describe("autonomy extension", () => {
 		).toHaveLength(1);
 	});
 
+	test("paused mutations invalidate gate evidence without resuming execution", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-paused-write-"),
+		);
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-paused-write-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile: join(cwd, "session.jsonl") },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Invalidate paused evidence" --max-attempts=2',
+			extension.ctx,
+		);
+		await extension.tools.autonomy_gate?.execute(
+			"running-verification",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+		const verified = await new AutonomyStore(cwd, { stateDirectory }).load();
+		if (verified === null) throw new Error("Expected verified autonomy state");
+		expect(
+			verified.gates.find((gate) => gate.id === "verification")?.status,
+		).toBe("pass");
+		await extension.commands.autonomy?.handler("pause", extension.ctx);
+
+		await extension.handlers.tool_result?.[0]?.(
+			{
+				toolCallId: "paused-write",
+				toolName: "write",
+				input: { path: "artifact.txt" },
+				isError: false,
+			},
+			extension.ctx,
+		);
+
+		const invalidated = await new AutonomyStore(cwd, {
+			stateDirectory,
+		}).load();
+		if (invalidated === null)
+			throw new Error("Expected invalidated autonomy state");
+		expect(invalidated.status).toBe("paused");
+		expect(invalidated.artifactRevision).toBe(verified.artifactRevision + 1);
+		expect(
+			invalidated.gates.every(
+				(gate) => gate.status === "pending" && gate.evidence === undefined,
+			),
+		).toBe(true);
+		await extension.commands.autonomy?.handler("resume", extension.ctx);
+		const resumed = await new AutonomyStore(cwd, { stateDirectory }).load();
+		expect(resumed?.status).toBe("running");
+		expect(resumed?.artifactRevision).toBe(invalidated.artifactRevision);
+		expect(resumed?.gates.every((gate) => gate.status === "pending")).toBe(
+			true,
+		);
+	});
+
+	test("does not persist pause until the worker confirms a terminal stop", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-pause-stop-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-pause-stop-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopping", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile: join(cwd, "session.jsonl") },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Pause only after stop" --max-attempts=2',
+			extension.ctx,
+		);
+
+		await extension.commands.autonomy?.handler("pause", extension.ctx);
+
+		const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+		expect(
+			(await new AutonomyStore(cwd, { stateDirectory }).load())?.status,
+		).toBe("running");
+		expect(extension.notifications.at(-1)).toContain(
+			"worker stop is not terminal",
+		);
+		expect(extension.notifications).not.toContain("Autonomy paused.");
+	});
+
 	test("queues a persistent continuation and resumes its daemon in a new session", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-project-"));
 		const stateHome = await mkdtemp(join(tmpdir(), "pantheon-autonomy-state-"));
