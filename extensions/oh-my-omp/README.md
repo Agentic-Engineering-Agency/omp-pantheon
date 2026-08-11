@@ -9,9 +9,12 @@ the Seshat/SpecSafe runtime into the local harness.
 
 ### Extension (`./index.ts`)
 - Advertises `~/.omp/agent/skills/` via `resources_discover`.
-- Owns the **Ralph / ULW loop runtime** (state machine driven by `agent_end`).
-- Registers extension commands: `/ralph-loop`, `/ulw-loop`, `/cancel-ralph`,
-  `/stop-continuation`.
+- Owns the opt-in **verified autonomy runtime**: native OMP goal binding,
+  objective verification gates, bounded attempts, checksummed state, and a
+  broker-supervised persistent worker.
+- Registers `/autonomy` and the `autonomy_gate` verification tool. See
+  [`docs/autonomy.md`](../../docs/autonomy.md) for lifecycle and migration
+  details.
 - Registers lifecycle guardrails: `todo-enforcer`, `comment-checker`, and
   `intent-gate`.
 
@@ -71,7 +74,7 @@ The OMO templates were adapted to OMP's tool grammar:
 | `LspFindReferences` | `lsp(action: "references")` |
 | `lsp_rename` | `lsp(action: "rename")` |
 | `ast_grep_search` / `ast_grep_replace` | `ast_grep` / `ast_edit` |
-| `background_output` / `background_cancel` | OMP's `task` lifecycle and the Ralph/ULW loop runtime provide the adapted continuation model. |
+| `background_output` / `background_cancel` | OMP's `task`/Hub lifecycle plus the verified `/autonomy` runtime provide bounded continuation and durable recovery. |
 
 ## How it loads
 
