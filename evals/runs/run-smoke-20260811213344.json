@@ -1,14 +1,14 @@
 {
   "schema_version": "evalfly.run.v1",
-  "run_id": "run-smoke-20260811213126",
+  "run_id": "run-smoke-20260811213344",
   "suite": "smoke",
   "config_name": "omp-pantheon EvalFly smoke suite",
-  "created_at": "2026-08-11T21:31:26.254Z",
+  "created_at": "2026-08-11T21:33:44.658Z",
   "context": {
-    "spec_slice": "Final integration verification",
-    "session_id": "extensions/oh-my-omp/autonomy,extensions/oh-my-omp/refinement,extensions/oh-my-omp/python-skills,test,README.md,docs/autonomy.md",
-    "commit_range": "main..HEAD",
-    "eval_report_path": "evals/reports/run-smoke-20260811213126.md"
+    "spec_slice": "Correct EvalFly commit range",
+    "session_id": "evals/runs,evals/reports",
+    "commit_range": "origin/main..HEAD",
+    "eval_report_path": "evals/reports/run-smoke-20260811213344.md"
   },
   "results": [
     {
