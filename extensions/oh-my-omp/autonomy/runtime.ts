@@ -245,8 +245,7 @@ export class AutonomyRuntime {
 
 	async onToolResult(event: ToolResultEvent): Promise<void> {
 		if (
-			event.isError ||
-			["read", "grep", "glob", "autonomy_gate"].includes(event.toolName)
+			["read", "grep", "glob", "goal", "autonomy_gate"].includes(event.toolName)
 		) {
 			return;
 		}
@@ -259,6 +258,7 @@ export class AutonomyRuntime {
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
 					input: event.input,
+					isError: event.isError,
 				}),
 			)
 			.digest("hex");

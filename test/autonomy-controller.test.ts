@@ -295,4 +295,17 @@ describe("AutonomyStore", () => {
 		await expect(store.load()).rejects.toThrow("symbolic link");
 		expect(await Bun.file(join(outside, "state.json")).exists()).toBe(false);
 	});
+
+	test("refuses symlinked project autonomy state files", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pantheon-autonomy-symlink-"));
+		const outside = await mkdtemp(join(tmpdir(), "pantheon-autonomy-outside-"));
+		roots.push(root, outside);
+		await mkdir(join(root, ".pi", "autonomy"), { recursive: true });
+		const outsideState = join(outside, "state.json");
+		await writeFile(outsideState, "{}");
+		await symlink(outsideState, join(root, ".pi", "autonomy", "state.json"));
+		const store = new AutonomyStore(root);
+
+		await expect(store.load()).rejects.toThrow("symbolic link");
+	});
 });

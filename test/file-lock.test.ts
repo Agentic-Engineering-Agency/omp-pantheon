@@ -28,6 +28,7 @@ describe("acquireFileLock", () => {
 				acquiredAt: "2000-01-01T00:00:00.000Z",
 			}),
 		);
+		await writeFile(`${lockPath}.breaker`, "orphaned");
 
 		let active = 0;
 		let maximumActive = 0;
@@ -47,5 +48,6 @@ describe("acquireFileLock", () => {
 		);
 
 		expect(maximumActive).toBe(1);
+		expect(await Bun.file(`${lockPath}.breaker`).exists()).toBe(false);
 	});
 });

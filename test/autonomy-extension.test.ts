@@ -367,6 +367,10 @@ describe("autonomy extension", () => {
 			await createFakeExtension();
 		await commands.autonomy?.handler('start "Ship" --max-attempts=2', ctx);
 		await handlers.goal_updated?.[0]?.(
+			{ goal: { id: "goal-1", objective: "Ship", status: "active" } },
+			ctx,
+		);
+		await handlers.goal_updated?.[0]?.(
 			{ goal: { id: "goal-1", objective: "Ship", status: "complete" } },
 			ctx,
 		);
@@ -384,6 +388,77 @@ describe("autonomy extension", () => {
 				toolName: "write",
 				input: { path: "src/result.ts" },
 				isError: false,
+			},
+			ctx,
+		);
+		await handlers.agent_end?.[0]?.({ messages: [] }, ctx);
+
+		expect(logs).not.toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+		expect(messages.at(-1)).toContain("native-goal, verification");
+	});
+
+	test("keeps native goal evidence across the goal control tool result", async () => {
+		const { commands, ctx, handlers, logs, tools } =
+			await createFakeExtension();
+		await commands.autonomy?.handler('start "Ship" --max-attempts=2', ctx);
+		await handlers.goal_updated?.[0]?.(
+			{ goal: { id: "goal-1", objective: "Ship", status: "active" } },
+			ctx,
+		);
+		await handlers.goal_updated?.[0]?.(
+			{ goal: { id: "goal-1", objective: "Ship", status: "complete" } },
+			ctx,
+		);
+		await handlers.tool_result?.[0]?.(
+			{
+				toolCallId: "goal-1",
+				toolName: "goal",
+				input: { op: "complete", id: "goal-1" },
+				isError: false,
+			},
+			ctx,
+		);
+		await tools.autonomy_gate?.execute(
+			"verification-1",
+			{},
+			undefined,
+			undefined,
+			ctx,
+		);
+		await handlers.agent_end?.[0]?.({ messages: [] }, ctx);
+
+		expect(logs).toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+	});
+
+	test("invalidates completed gates after a failed mutating tool result", async () => {
+		const { commands, ctx, handlers, logs, messages, tools } =
+			await createFakeExtension();
+		await commands.autonomy?.handler('start "Ship" --max-attempts=2', ctx);
+		await handlers.goal_updated?.[0]?.(
+			{ goal: { id: "goal-1", objective: "Ship", status: "active" } },
+			ctx,
+		);
+		await handlers.goal_updated?.[0]?.(
+			{ goal: { id: "goal-1", objective: "Ship", status: "complete" } },
+			ctx,
+		);
+		await tools.autonomy_gate?.execute(
+			"verification-1",
+			{},
+			undefined,
+			undefined,
+			ctx,
+		);
+		await handlers.tool_result?.[0]?.(
+			{
+				toolCallId: "bash-1",
+				toolName: "bash",
+				input: { command: "printf bad >> artifact && false" },
+				isError: true,
 			},
 			ctx,
 		);

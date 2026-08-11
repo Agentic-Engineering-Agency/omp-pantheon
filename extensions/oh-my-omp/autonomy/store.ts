@@ -124,7 +124,9 @@ export class AutonomyStore {
 
 	private async assertSafeStatePath(): Promise<void> {
 		if (!this.projectState) return;
-		await assertNoSymlinkComponents(this.projectRoot, dirname(this.statePath));
+		for (const path of [this.statePath, this.journalPath, this.lockPath]) {
+			await assertNoSymlinkComponents(this.projectRoot, path);
+		}
 	}
 
 	private async readOptional(path: string): Promise<string | null> {

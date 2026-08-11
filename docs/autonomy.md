@@ -32,7 +32,7 @@ The default run has two gates:
 1. `native-goal`: Pantheon first binds the ID of an `active` native OMP goal whose objective exactly matches the autonomy task. It records a pass only when OMP later emits `complete` for that same ID. Unrelated goals are ignored.
 2. `verification`: `autonomy_gate` accepts no evidence parameters. It asks the host runner to execute the command frozen by `/autonomy start --verify=...` and records the observed exit status.
 
-Every required gate must pass for the same attempt and artifact revision. Gate reporters are fixed by type (`native-goal-event` or `host-verifier`); model-supplied evidence cannot substitute for either. Every successful tool result except the known read-only tools (`read`, `grep`, and `glob`) and `autonomy_gate` advances the artifact revision and resets all gates. This conservative rule also treats unknown tools as mutating, so verification must run after the last mutation. A failed or missing gate causes another bounded attempt; exhausting `maxAttempts` records a terminal failure with evidence.
+Every required gate must pass for the same attempt and artifact revision. Gate reporters are fixed by type (`native-goal-event` or `host-verifier`); model-supplied evidence cannot substitute for either. Every potentially mutating tool result advances the artifact revision and resets all gates, whether that tool reports success or failure. Only known read-only tools (`read`, `grep`, and `glob`) plus the `goal` control tool and `autonomy_gate` are exempt. Unknown tools are treated as mutating, so verification must run after the last mutation. A failed or missing gate causes another bounded attempt; exhausting `maxAttempts` records a terminal failure with evidence.
 
 Model prose is never completion evidence. `<promise>DONE</promise>`, similar markers, and an `agent_end` event cannot complete a run by themselves.
 
@@ -59,6 +59,7 @@ Project-local state:
 ```text
 .pi/refinement/ledger.jsonl                     refinement history
 .pi/refinement/quarantine.jsonl                 malformed ledger evidence
+.pi/refinement/snapshots/<proposal-id>.json       rollback bytes, mode, and checksum
 .pi/python-skills/venvs/<content-hash>/          isolated Python environments
 ```
 
@@ -74,7 +75,7 @@ ${XDG_STATE_HOME:-~/.local/state}/omp-pantheon/autonomy/
   <project-hash>/runs/<run-id>/scheduler/generations/<n>/events.jsonl
 ```
 
-Corrupt, non-contiguous, checksum-mismatched, symlinked project state, or concurrent stale state fails closed. Run and refinement journals serialize read/check/append transitions; orphaned Python provisioning locks are reclaimed only after their owner is dead and their age exceeds the configured threshold. The controller also keeps the authoritative run state in process memory after loading it, so ordinary model-facing tool calls cannot replace it through project files.
+Corrupt, non-contiguous, checksum-mismatched, symlinked project state, or concurrent stale state fails closed. Run and refinement journals serialize read/check/append transitions. File-lock ownership is backed by a SQLite transaction, so a crashed owner releases the serialization guard without an orphaned breaker; old JSON lock metadata is reclaimed only after its owner is dead and its age exceeds the configured threshold. The controller also keeps the authoritative run state in process memory after loading it, so ordinary model-facing tool calls cannot replace it through project files.
 
 This is not a security boundary against arbitrary native code already running as the same OS user: such code can access that user's private state. The boundary protects the normal model tool surface, prevents repository content from acting as an executable queue, rejects project-state symlinks, and limits accidental disclosure to other local users. Run untrusted native code in an OS sandbox.
 
@@ -86,7 +87,7 @@ Refinement is append-only and approval-gated:
 proposed → validated → approved → active → rolled_back
 ```
 
-Validation evidence is required before approval. Approval is a host-adapter operation, not a registered model tool; `approvedBy` records the trusted host identity supplied by that adapter and is provenance, not independent authentication. Activation verifies that the proposal's base hash still matches the current artifact and serializes conflict detection with the append, so only one proposal can become active per artifact. Rejection, quarantine, and rollback retain their reasons in the ledger. No proposal self-approves.
+Validation evidence is required before approval. Approval is a host-adapter operation, not a registered model tool; `approvedBy` records the trusted host identity supplied by that adapter and is provenance, not independent authentication. Activation verifies the actual artifact bytes against the proposal's base hash, writes a checksummed rollback snapshot, and serializes conflict detection with the ledger append; the trusted host adapter applies the separately validated candidate content. Rollback restores the snapshotted bytes and mode atomically only when the artifact still matches either the approved candidate hash or an already-restored base hash, so unrelated edits fail closed. Rejection, quarantine, and rollback retain their reasons in the ledger. No proposal self-approves.
 
 ## Python skill policy
 
