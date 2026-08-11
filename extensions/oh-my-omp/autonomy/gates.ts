@@ -13,12 +13,13 @@ import type {
 
 interface SpecSafeHistoryEntry {
 	sliceId: string;
+	beganAt: string;
 	outcome: "PASS" | "FAIL" | "ABANDONED";
 	endedAt: string;
 }
 
 interface SpecSafeState {
-	currentSlice: { id: string } | null;
+	currentSlice: { id: string; beganAt: string } | null;
 	history: SpecSafeHistoryEntry[];
 }
 
@@ -76,10 +77,19 @@ function readSpecSafeState(cwd: string): SpecSafeState | null {
 		typeof rawCurrentSlice === "object" &&
 		rawCurrentSlice !== null &&
 		!Array.isArray(rawCurrentSlice) &&
-		"id" in rawCurrentSlice
+		"id" in rawCurrentSlice &&
+		"beganAt" in rawCurrentSlice
 	) {
+		const beganAt = requireNonEmptyString(
+			rawCurrentSlice.beganAt,
+			"SpecSafe slice start time",
+		);
+		if (!Number.isFinite(Date.parse(beganAt))) {
+			throw new Error("malformed SpecSafe slice start time");
+		}
 		currentSlice = {
 			id: requireNonEmptyString(rawCurrentSlice.id, "SpecSafe slice id"),
+			beganAt,
 		};
 	} else {
 		throw new Error("malformed SpecSafe current slice");
@@ -90,6 +100,7 @@ function readSpecSafeState(cwd: string): SpecSafeState | null {
 			entry === null ||
 			Array.isArray(entry) ||
 			!("sliceId" in entry) ||
+			!("beganAt" in entry) ||
 			!("outcome" in entry) ||
 			!("endedAt" in entry)
 		) {
@@ -99,29 +110,30 @@ function readSpecSafeState(cwd: string): SpecSafeState | null {
 		if (outcome !== "PASS" && outcome !== "FAIL" && outcome !== "ABANDONED") {
 			throw new Error("malformed SpecSafe history outcome");
 		}
+		const beganAt = requireNonEmptyString(
+			entry.beganAt,
+			"SpecSafe history start time",
+		);
 		const endedAt = requireNonEmptyString(
 			entry.endedAt,
 			"SpecSafe history end time",
 		);
-		if (!Number.isFinite(Date.parse(endedAt))) {
-			throw new Error("malformed SpecSafe history end time");
+		if (
+			!Number.isFinite(Date.parse(beganAt)) ||
+			!Number.isFinite(Date.parse(endedAt))
+		) {
+			throw new Error("malformed SpecSafe history time");
 		}
 		return {
 			sliceId: requireNonEmptyString(
 				entry.sliceId,
 				"SpecSafe history slice id",
 			),
+			beganAt,
 			outcome,
 			endedAt,
 		};
 	});
-	const historyIds = new Set(history.map((entry) => entry.sliceId));
-	if (
-		historyIds.size !== history.length ||
-		(currentSlice !== null && historyIds.has(currentSlice.id))
-	) {
-		throw new Error("malformed SpecSafe slice history");
-	}
 	return { currentSlice, history };
 }
 
@@ -166,7 +178,11 @@ export function configuredAutonomyGates(cwd: string): AutonomyGateDefinition[] {
 		gates.push({
 			id: "specsafe",
 			label: "SpecSafe slice closure",
-			requirement: { kind: "specsafe", sliceId: specSafe.currentSlice.id },
+			requirement: {
+				kind: "specsafe",
+				sliceId: specSafe.currentSlice.id,
+				beganAt: specSafe.currentSlice.beganAt,
+			},
 		});
 	}
 	return gates;
@@ -229,13 +245,15 @@ function evaluateSpecSafeGate(
 	try {
 		const state = readSpecSafeState(cwd);
 		const closure = state?.history.find(
-			(entry) => entry.sliceId === requirement.sliceId,
+			(entry) =>
+				entry.sliceId === requirement.sliceId &&
+				entry.beganAt === requirement.beganAt,
 		);
 		if (closure?.outcome === "PASS") {
 			return {
 				gateId: gate.id,
 				status: "pass",
-				evidence: `specsafe:${closure.sliceId}:PASS:${closure.endedAt}`,
+				evidence: `specsafe:${closure.sliceId}:${closure.beganAt}:PASS:${closure.endedAt}`,
 				reporter: "specsafe-adapter",
 			};
 		}
@@ -244,8 +262,8 @@ function evaluateSpecSafeGate(
 			status: "fail",
 			evidence:
 				closure === undefined
-					? `specsafe:${requirement.sliceId}:closure-unavailable`
-					: `specsafe:${closure.sliceId}:${closure.outcome}:${closure.endedAt}`,
+					? `specsafe:${requirement.sliceId}:${requirement.beganAt}:closure-unavailable`
+					: `specsafe:${closure.sliceId}:${closure.beganAt}:${closure.outcome}:${closure.endedAt}`,
 			reporter: "specsafe-adapter",
 		};
 	} catch (error) {

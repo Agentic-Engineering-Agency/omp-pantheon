@@ -23,7 +23,7 @@ export type AutonomyGateRequirement =
 			commitRange: string;
 			activatedAt: string;
 	  }
-	| { kind: "specsafe"; sliceId: string };
+	| { kind: "specsafe"; sliceId: string; beganAt: string };
 
 export interface AutonomyGateDefinition {
 	id: string;

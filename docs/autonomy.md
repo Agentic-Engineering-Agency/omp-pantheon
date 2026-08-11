@@ -32,7 +32,7 @@ Every run always has two core gates and conditionally freezes the active project
 1. `native-goal`: Pantheon first binds the ID of an `active` native OMP goal whose objective exactly matches the autonomy task. It records a pass only when OMP later emits `complete` for that same ID. Unrelated goals are ignored.
 2. `verification`: `autonomy_gate` accepts no evidence parameters. It asks the host runner to execute the command frozen by `/autonomy start --verify=...` and records the observed exit status.
 3. `evalfly`: when EvalFly enforcement is active at start, Pantheon captures its suite, commit range, and activation time. The adapter requires a canonical passing run/report that exactly matches that contract and is newer than activation. Disabling or replacing the captured enforcement contract does not waive the gate.
-4. `specsafe`: when an exact SpecSafe slice is open at start, Pantheon captures its slice ID. The adapter passes only after that same slice appears in history with `PASS`; a different, missing, failed, or abandoned slice does not satisfy it.
+4. `specsafe`: when an exact SpecSafe slice is open at start, Pantheon captures its slice instance: ID and `beganAt` timestamp. The adapter passes only after that same instance appears in history with `PASS`; reopening the same ID later, or closing a different, missing, failed, or abandoned instance, does not satisfy it.
 
 Configured EvalFly and SpecSafe adapters refresh at `agent_end` before completion is evaluated. Malformed configured state rejects `/autonomy start`; unavailable, stale, or mismatched evidence fails closed.
 
@@ -99,12 +99,14 @@ Python skills run under a manifest contract:
 
 - bounded Python version range;
 - exact `package==version` dependency pins;
-- project-relative `.py` entrypoint;
+- project-relative `.py` entrypoint that resolves to a singly linked regular file below the canonical, non-symlinked skill root, with no symlinked path component;
 - JSON-object input and output contracts;
 - bounded timeout and output size;
 - environment variables require both a manifest request and a host-owned allowlist;
 - content-addressed virtual environment cache with stale-owner lock recovery;
+- cache reuse requires a checksummed environment marker whose contract and current Python executable hash match; symlinked, hard-linked, escaped, or non-regular cache artifacts fail closed;
 - bounded provisioning subprocesses with a scrubbed environment;
+- runner and provisioning subprocesses use dedicated process groups; timeout and output-limit failures terminate the whole process tree;
 - `network: deny` fails closed unless a network sandbox adapter is available, and uncached dependencies are never installed for a network-denied skill.
 - duplicate skill IDs are rejected across a loaded manifest collection.
 

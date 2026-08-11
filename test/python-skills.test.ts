@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,6 +47,17 @@ function validManifest(overrides: Record<string, unknown> = {}) {
 		output: { type: "object", required: ["message"] },
 		...overrides,
 	});
+}
+
+function manifestEnvironmentHash(manifest: ReturnType<typeof validManifest>) {
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				python: manifest.python,
+				dependencies: [...manifest.dependencies].sort(),
+			}),
+		)
+		.digest("hex");
 }
 
 afterEach(async () => {
@@ -101,14 +120,7 @@ describe("Python skill environment", () => {
 		if (!pythonPath) throw new Error("python3 is required for this test");
 		const root = await createRoot();
 		const manifest = validManifest();
-		const environmentHash = createHash("sha256")
-			.update(
-				JSON.stringify({
-					python: manifest.python,
-					dependencies: [...manifest.dependencies].sort(),
-				}),
-			)
-			.digest("hex");
+		const environmentHash = manifestEnvironmentHash(manifest);
 		const lockPath = join(
 			root,
 			".pi",
@@ -151,6 +163,94 @@ describe("Python skill environment", () => {
 			"symbolic link",
 		);
 	});
+
+	test("rejects a symlinked content-addressed environment directory", async () => {
+		const root = await createRoot();
+		const outside = await createRoot();
+		const manifest = validManifest();
+		const environmentPath = join(
+			root,
+			".pi",
+			"python-skills",
+			"venvs",
+			manifestEnvironmentHash(manifest),
+		);
+		await mkdir(join(root, ".pi", "python-skills", "venvs"), {
+			recursive: true,
+		});
+		await symlink(outside, environmentPath, "dir");
+		const environment = new PythonSkillEnvironment(root, {
+			pythonPath: pythonPath ?? "python3",
+		});
+
+		await expect(environment.provision(manifest)).rejects.toThrow(
+			"owned directory",
+		);
+	});
+
+	test("rejects a poisoned cached Python executable symlink", async () => {
+		const root = await createRoot();
+		const outside = await createRoot();
+		const manifest = validManifest();
+		const environmentPath = join(
+			root,
+			".pi",
+			"python-skills",
+			"venvs",
+			manifestEnvironmentHash(manifest),
+		);
+		await mkdir(join(environmentPath, "bin"), { recursive: true });
+		const outsidePython = join(outside, "python");
+		await writeFile(outsidePython, "sentinel");
+		await symlink(outsidePython, join(environmentPath, "bin", "python"));
+		const environment = new PythonSkillEnvironment(root, {
+			pythonPath: pythonPath ?? "python3",
+		});
+
+		await expect(environment.provision(manifest)).rejects.toThrow(
+			"symbolic link",
+		);
+		expect(await readFile(outsidePython, "utf8")).toBe("sentinel");
+	});
+
+	test("kills the provisioning process tree on timeout", async () => {
+		if (!pythonPath) throw new Error("python3 is required for this test");
+		if (process.platform === "win32") return;
+		const root = await createRoot();
+		const pidPath = join(root, "provision-child.pid");
+		const fakePython = join(root, "fake-python");
+		await writeFile(
+			fakePython,
+			[
+				`#!${pythonPath}`,
+				"import pathlib, subprocess, sys, time",
+				`child = subprocess.Popen([sys.executable, \"-c\", \"import time; time.sleep(60)\"])`,
+				`pathlib.Path(${JSON.stringify(pidPath)}).write_text(str(child.pid))`,
+				"time.sleep(60)",
+			].join("\n"),
+		);
+		await chmod(fakePython, 0o755);
+		const environment = new PythonSkillEnvironment(root, {
+			pythonPath: fakePython,
+			provisioningTimeoutMs: 300,
+		});
+
+		await expect(environment.provision(validManifest())).rejects.toThrow(
+			"Timed out",
+		);
+		const childPid = Number(await readFile(pidPath, "utf8"));
+		let childAlive = true;
+		for (let attempt = 0; attempt < 20 && childAlive; attempt += 1) {
+			try {
+				process.kill(childPid, 0);
+				await Bun.sleep(10);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				childAlive = false;
+			}
+		}
+		expect(childAlive).toBe(false);
+	});
 });
 
 describe("Python skill runner", () => {
@@ -181,6 +281,58 @@ describe("Python skill runner", () => {
 			secret: null,
 		});
 		expect(result.stderr).toBe("");
+	});
+
+	test("rejects an entrypoint symlink outside the skill root", async () => {
+		if (!pythonPath) throw new Error("python3 is required for this test");
+		const root = await createRoot();
+		const outside = await createRoot();
+		const outsideEntrypoint = join(outside, "outside.py");
+		await writeFile(outsideEntrypoint, 'print("{}")\n');
+		await symlink(outsideEntrypoint, join(root, "main.py"));
+		const runner = new PythonSkillRunner({
+			provision: async () => ({ pythonPath, reused: true }),
+		});
+
+		await expect(
+			runner.run(root, validManifest(), { message: "hello" }),
+		).rejects.toThrow("symbolic link");
+	});
+
+	test("kills the Python process tree when execution times out", async () => {
+		if (!pythonPath) throw new Error("python3 is required for this test");
+		const root = await createRoot();
+		const pidPath = join(root, "child.pid");
+		await writeFile(
+			join(root, "main.py"),
+			[
+				"import pathlib, subprocess, sys, time",
+				`child = subprocess.Popen([sys.executable, \"-c\", \"import time; time.sleep(60)\"])`,
+				`pathlib.Path(${JSON.stringify(pidPath)}).write_text(str(child.pid))`,
+				"time.sleep(60)",
+			].join("\n"),
+		);
+		const runner = new PythonSkillRunner({
+			provision: async () => ({ pythonPath, reused: true }),
+		});
+
+		await expect(
+			runner.run(root, validManifest({ timeoutMs: 300 }), {
+				message: "hello",
+			}),
+		).rejects.toThrow("timed out");
+		const childPid = Number(await readFile(pidPath, "utf8"));
+		let childAlive = true;
+		for (let attempt = 0; attempt < 20 && childAlive; attempt += 1) {
+			try {
+				process.kill(childPid, 0);
+				await Bun.sleep(10);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				childAlive = false;
+			}
+		}
+		expect(childAlive).toBe(false);
 	});
 
 	test("rejects manifest-requested environment without host authorization", async () => {

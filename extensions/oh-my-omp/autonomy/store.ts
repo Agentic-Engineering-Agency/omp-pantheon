@@ -303,7 +303,9 @@ export class AutonomyStore {
 			case "specsafe":
 				if (
 					typeof requirement.sliceId !== "string" ||
-					requirement.sliceId.trim().length === 0
+					requirement.sliceId.trim().length === 0 ||
+					typeof requirement.beganAt !== "string" ||
+					!Number.isFinite(Date.parse(requirement.beganAt))
 				) {
 					return false;
 				}

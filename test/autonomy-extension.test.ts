@@ -319,7 +319,14 @@ describe("autonomy extension", () => {
 					beganAt: "2026-08-11T22:00:00.000Z",
 					costCounter: {},
 				},
-				history: [],
+				history: [
+					{
+						sliceId: "SPEC-AUTONOMY",
+						beganAt: "2026-08-10T20:00:00.000Z",
+						outcome: "PASS",
+						endedAt: "2026-08-10T20:30:00.000Z",
+					},
+				],
 			}),
 		);
 		const extension = await createFakeExtension(registerTestAutonomy, { cwd });
@@ -363,6 +370,13 @@ describe("autonomy extension", () => {
 				history: [
 					{
 						sliceId: "SPEC-AUTONOMY",
+						beganAt: "2026-08-10T20:00:00.000Z",
+						outcome: "PASS",
+						endedAt: "2026-08-10T20:30:00.000Z",
+					},
+					{
+						sliceId: "SPEC-AUTONOMY",
+						beganAt: "2026-08-11T22:00:00.000Z",
 						outcome: "PASS",
 						endedAt: "2026-08-11T22:00:02.000Z",
 					},
