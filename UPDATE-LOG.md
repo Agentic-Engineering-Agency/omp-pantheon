@@ -17,6 +17,29 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
 - Hooks: `todo-enforcer`, `comment-checker`, `intent-gate`
 - Skills: `hyperplan`, `security-research`, `tech-debt-audit`, `remove-deadcode`
 
+## 2026-08-11 — Prime Agent concepts adapted to OMP
+
+- Added opt-in `/autonomy` and `autonomy_gate`; removed the extension's
+  Ralph/ULW promise-loop runtime and its project-local loop state.
+- Added a public-SDK session worker supervised by OMP's launch broker. It starts
+  per project on demand; installation does not add or enable a global service.
+- Added checksummed objective and command journals, lease/fencing recovery,
+  persisted deadlines, deterministic bounded retries, and verified
+  generation-based scheduler compaction.
+- Added approval-gated refinement and isolated Python skill contracts.
+- Added capability adapters for JSON-only kernel checkpoints and retained
+  subagents. Both report unsupported on stock OMP 17.2.14 because the required
+  public APIs do not exist yet.
+- Updated the root and extension dependency contract to
+  `@oh-my-pi/pi-coding-agent ^17.2.14`.
+- Existing `/ultrawork` and `/ulw` prompt commands remain installable
+  orchestration prompts; they no longer own persistence or completion.
+
+Operational state is project-local under `.pi/autonomy/`,
+`.pi/refinement/`, and `.pi/python-skills/`. See
+[`docs/autonomy.md`](./docs/autonomy.md) for setup, migration, recovery, and
+policy details.
+
 ## Upstream source map (`packages/omo-opencode/src/`)
 
 | Piece | Upstream source |

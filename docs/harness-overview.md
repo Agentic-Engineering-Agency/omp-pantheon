@@ -21,6 +21,9 @@ shell, browser, debugger, LSP/DAP, and general-purpose agent workflows.
 - EvalFly for project-local eval configs, deterministic runs, reports, trace hygiene, compare/summary commands, and local enforcement;
 - branch E2E protocol for testing user-visible changes through real app behavior;
 - lifecycle hooks and guardrails that make unsafe or evidence-free completion harder;
+- opt-in verified autonomy with native OMP goal gates, durable session work,
+  persisted deadlines, lease/fencing recovery, and bounded retries;
+- approval-gated refinement plus isolated, manifest-driven Python skills;
 - installation as one source-of-truth OMP bundle under `~/.omp/omp-pantheon`.
 
 ## What this harness is optimizing for
@@ -52,6 +55,9 @@ The target failure modes are:
 | Local enforcement | Block local session completion when explicit EvalFly evidence is required and missing. | Implemented; activated per project with `evalfly enforce start`. |
 | CI enforcement | Reject PRs without EvalFly check evidence. | Template exists; consuming repos must install workflow and branch protection. |
 | Branch E2E | Verify real user behavior through UI/backend/log/network evidence and negative cases. | Implemented as `agentic-branch-e2e` skill/protocol; not yet automatically imported into EvalFly. |
+| Verified autonomy | Keep an objective running across agent/process boundaries without trusting completion prose. | Implemented as opt-in `/autonomy`, native-goal and verification gates, durable journals, scheduler generations, and broker-managed `pantheon-agentd`. |
+| Refinement | Validate and approve proposed harness changes before activation. | Implemented as an append-only checksummed ledger with conflict, quarantine, and rollback states. |
+| Python skills | Run skill-local Python with reproducible dependencies and explicit bounds. | Implemented with exact pins, content-addressed virtual environments, JSON contracts, and fail-closed network denial. |
 
 ## The intended issue flow
 
@@ -78,6 +84,8 @@ A non-trivial issue should move through these stages:
 
 7. Evidence
    Run tests and EvalFly; produce run JSON and canonical markdown report.
+   Optional `/autonomy` mode keeps the objective alive across session worker
+   restarts and requires current native-goal plus verification evidence.
 
 8. Trace hygiene
    Import/normalize/audit sanitized traces when execution evidence matters.
@@ -105,6 +113,24 @@ For stricter work:
 ```text
 Strict mode: eval first, feature second. Do not implement until criteria/evals/tests are defined. Do not close until EvalFly enforcement passes. Mark any bypassed production layer as INCONCLUSIVE.
 ```
+
+## Verified autonomy status
+
+Pantheon now provides an opt-in durable autonomy runtime. It journals objective
+state and queued work, resumes persisted OMP sessions through the public SDK,
+uses lease claims and fencing tokens for crash recovery, schedules absolute
+deadlines with bounded deterministic retries, and compacts scheduler state only
+through verified generations.
+
+Completion requires native OMP goal completion and concrete verification
+evidence for the same attempt and artifact revision. Model prose and legacy
+Ralph/ULW promise markers are ignored.
+
+Stock OMP 17.2.14 does not expose public eval-kernel export/import or retained
+subagent keep-alive APIs. The corresponding Pantheon adapters therefore report
+unsupported until upstream provides those contracts. See
+[Verified autonomy](./autonomy.md) for commands, state paths, lifecycle,
+recovery, refinement, and Python skill policy.
 
 ## EvalFly status
 
@@ -168,8 +194,8 @@ A complete always-on closed-loop evaluation platform for every repo.
 ```
 
 The differentiator is the integrated local composition: OMP runtime + specialist
-agents + SpecSafe + Honcho memory + EvalFly evidence/enforcement + trace hygiene
-and branch E2E protocol.
+agents + verified autonomy + SpecSafe + Honcho memory + EvalFly
+evidence/enforcement + trace hygiene and branch E2E protocol.
 
 The remaining maturity work is to close the loop across CI/branch protection,
 semantic/agentic eval execution, persistent trace capture, judge execution,
