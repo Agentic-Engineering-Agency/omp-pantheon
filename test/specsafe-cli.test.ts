@@ -4,7 +4,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { readSpecSafeClosureReceipt } from "../extensions/oh-my-omp/specsafe-receipts";
+import { privateProjectAreaRoot } from "../extensions/oh-my-omp/private-state";
+import {
+	readSpecSafeClosureReceipt,
+	writeSpecSafeClosureReceipt,
+} from "../extensions/oh-my-omp/specsafe-receipts";
 import {
 	type CostCounter,
 	type StateFile,
@@ -123,6 +127,66 @@ describe("[unit] specsafe CLI lifecycle", () => {
 			outcome: "PASS",
 			endedAt: state?.history[0]?.endedAt,
 		});
+	});
+
+	test("C2a retries an interrupted close with the original receipt timestamp", () => {
+		const begin = beginTestSlice();
+		expectBeginSucceeded(begin);
+		const slice = readState()?.currentSlice;
+		expect(slice).not.toBeNull();
+		const endedAt = new Date(
+			Date.parse(slice?.beganAt as string) + 1_000,
+		).toISOString();
+		writeSpecSafeClosureReceipt(
+			tempDir,
+			{
+				sliceId: slice?.id as string,
+				beganAt: slice?.beganAt as string,
+				endedAt,
+				outcome: "PASS",
+			},
+			path.join(tempDir, ".state"),
+		);
+
+		const retry = runCli("end", "PASS");
+
+		expect(retry.status).toBe(0);
+		expect(readState()?.currentSlice).toBeNull();
+		expect(readState()?.history[0]?.endedAt).toBe(endedAt);
+	});
+
+	test("C2b repairs a receipt publication interrupted before temp-link cleanup", () => {
+		const begin = beginTestSlice();
+		expectBeginSucceeded(begin);
+		const beganAt = readState()?.currentSlice?.beganAt as string;
+		expect(runCli("end", "PASS").status).toBe(0);
+		const directory = path.join(
+			privateProjectAreaRoot(tempDir, "specsafe", path.join(tempDir, ".state")),
+			"closures",
+		);
+		const target = path.join(
+			directory,
+			fs
+				.readdirSync(directory)
+				.find((name) => name.endsWith(".json")) as string,
+		);
+		const interruptedTemp = path.join(
+			directory,
+			".00000000-0000-4000-8000-000000000000.tmp",
+		);
+		fs.linkSync(target, interruptedTemp);
+		expect(fs.statSync(target).nlink).toBe(2);
+
+		expect(
+			readSpecSafeClosureReceipt(
+				tempDir,
+				"TEST-001",
+				beganAt,
+				path.join(tempDir, ".state"),
+			),
+		).toMatchObject({ outcome: "PASS" });
+		expect(fs.statSync(target).nlink).toBe(1);
+		expect(fs.existsSync(interruptedTemp)).toBe(false);
 	});
 
 	test("C3 status reports OPEN with the slice id and reports no slice open after close", () => {

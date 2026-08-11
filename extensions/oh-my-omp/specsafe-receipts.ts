@@ -1,16 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	type Stats,
 	chmodSync,
 	existsSync,
 	linkSync,
 	lstatSync,
 	mkdirSync,
 	readFileSync,
+	readdirSync,
 	realpathSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
 	preparePrivateProjectAreaRootSync,
 	privateProjectAreaRoot,
@@ -83,13 +85,40 @@ function receiptPath(
 	);
 }
 
+const RECEIPT_TEMP_FILE = /^\.[0-9a-f-]{36}\.tmp$/;
+
+function recoverInterruptedTempLink(
+	target: string,
+	targetMetadata: Stats,
+): void {
+	if (targetMetadata.nlink === 1) return;
+	for (const name of readdirSync(dirname(target))) {
+		if (!RECEIPT_TEMP_FILE.test(name)) continue;
+		const candidate = join(dirname(target), name);
+		const candidateMetadata = lstatSync(candidate);
+		if (
+			!candidateMetadata.isSymbolicLink() &&
+			candidateMetadata.isFile() &&
+			candidateMetadata.dev === targetMetadata.dev &&
+			candidateMetadata.ino === targetMetadata.ino
+		) {
+			unlinkSync(candidate);
+		}
+	}
+}
+
 function parsePersistedReceipt(
 	path: string,
 	expectedSliceId: string,
 	expectedBeganAt: string,
 ): SpecSafeClosureReceipt {
-	const metadata = lstatSync(path);
-	if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.nlink !== 1) {
+	let metadata = lstatSync(path);
+	if (metadata.isSymbolicLink() || !metadata.isFile()) {
+		throw new Error(`Unsafe SpecSafe receipt file: ${path}`);
+	}
+	recoverInterruptedTempLink(path, metadata);
+	metadata = lstatSync(path);
+	if (metadata.nlink !== 1) {
 		throw new Error(`Unsafe SpecSafe receipt file: ${path}`);
 	}
 	const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));

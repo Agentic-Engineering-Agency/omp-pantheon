@@ -97,7 +97,7 @@ Create or modify these units:
 - Modify: `tsconfig.json`
 
 - [ ] Test default-off registration and the `/autonomy` command lifecycle.
-- [ ] Test adapters for native OMP goal completion, targeted test/smoke evidence, EvalFly enforcement, and SpecSafe closure backed by a private, activation-bound receipt.
+- [ ] Test adapters for native OMP goal completion, targeted test/smoke evidence, EvalFly enforcement, and SpecSafe closure backed by a private, activation-bound, crash-recoverable receipt.
 - [ ] Test fail-closed behavior when a configured gate is unavailable, stale, malformed, project-forged, or replayed.
 - [ ] Register hooks only after contract tests pass.
 - [ ] Remove Ralph/ULW runtime imports, state files, commands, promise detection, and formatting/typecheck references.

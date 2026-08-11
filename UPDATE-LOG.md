@@ -35,9 +35,9 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
 - Existing `/ultrawork` and `/ulw` prompt commands remain installable
   orchestration prompts; they no longer own persistence or completion.
 
-Autonomy objective state, executable queues, SpecSafe gate receipts, and Python
-caches live in private per-user XDG state. Refinement history remains
-project-local under `.pi/refinement/`. See
+Autonomy objective state, executable queues, crash-recoverable SpecSafe gate
+receipts, and Python caches live in private per-user XDG state. Refinement
+history remains project-local under `.pi/refinement/`. See
 [`docs/autonomy.md`](./docs/autonomy.md) for setup, migration, recovery, and
 policy details.
 

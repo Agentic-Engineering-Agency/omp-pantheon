@@ -29,7 +29,7 @@ bun run .omp/skills/specsafe/bin/specsafe.ts end PASS
 
 The archived `HistoryEntry.costSummary` is a by-value copy of the slice's `costCounter` at end-time.
 
-Before changing project history, `end` writes an immutable, checksummed closure receipt under `${XDG_STATE_HOME:-~/.local/state}/omp-pantheon/specsafe/<project-hash>/closures/`. Prime autonomy gates require this private receipt in addition to the project history entry, and reject receipts created before gate activation.
+Before changing project history, `end` writes an immutable, checksummed closure receipt under `${XDG_STATE_HOME:-~/.local/state}/omp-pantheon/specsafe/<project-hash>/closures/`. Prime autonomy gates require this private receipt in addition to the project history entry, and reject receipts created before gate activation. If the process stops after receipt publication but before the state-file rename, rerunning `end` with the same outcome reuses the original receipt timestamp and completes the transition; interrupted temporary hard links are repaired before validation.
 
 ### status
 
