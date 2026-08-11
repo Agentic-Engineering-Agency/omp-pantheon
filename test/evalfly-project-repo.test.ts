@@ -18,6 +18,7 @@ const criticalEvalFiles = [
 	"docs/evalfly/modes.md",
 	"skills/evaluation-flywheel/SKILL.md",
 	"test/evalfly-enforcement-gate.test.ts",
+	"test/specsafe-cli.test.ts",
 ] as const;
 
 describe("omp-pantheon EvalFly project repo", () => {
@@ -42,6 +43,7 @@ describe("omp-pantheon EvalFly project repo", () => {
 			"evalfly-modes-doc-exists",
 			"evaluation-flywheel-skill-exists",
 			"evalfly-gate-test-exists",
+			"specsafe-recovery-regression-exists",
 		]);
 
 		for (const [index, testCase] of config.cases.entries()) {
