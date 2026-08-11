@@ -9,7 +9,11 @@ import {
 	ensurePrivateDirectory,
 } from "../private-files";
 
-import type { AutonomyJournalEvent, AutonomyRun } from "./types";
+import type {
+	AutonomyGateRecord,
+	AutonomyJournalEvent,
+	AutonomyRun,
+} from "./types";
 
 const STATE_DIRECTORY = join(".pi", "autonomy");
 const STATE_FILE = "state.json";
@@ -191,19 +195,137 @@ export class AutonomyStore {
 	}
 
 	private assertState(state: AutonomyRun, source: string): void {
+		const validStatuses: AutonomyRun["status"][] = [
+			"running",
+			"waiting",
+			"paused",
+			"succeeded",
+			"failed",
+			"cancelled",
+		];
 		if (
 			state.schemaVersion !== 1 ||
 			typeof state.id !== "string" ||
+			state.id.trim().length === 0 ||
 			typeof state.task !== "string" ||
+			state.task.trim().length === 0 ||
+			!validStatuses.includes(state.status) ||
 			!Number.isInteger(state.revision) ||
 			state.revision < 1 ||
 			!Number.isInteger(state.attempt) ||
 			state.attempt < 1 ||
+			!Number.isInteger(state.maxAttempts) ||
+			state.maxAttempts < state.attempt ||
+			!Number.isInteger(state.artifactRevision) ||
+			state.artifactRevision < 0 ||
 			!Array.isArray(state.gates) ||
+			state.gates.length === 0 ||
 			typeof state.verificationCommand !== "string" ||
-			state.verificationCommand.trim().length === 0
+			state.verificationCommand.trim().length === 0 ||
+			!Number.isFinite(Date.parse(state.createdAt)) ||
+			!Number.isFinite(Date.parse(state.updatedAt)) ||
+			(state.nativeGoalId !== undefined &&
+				(typeof state.nativeGoalId !== "string" ||
+					state.nativeGoalId.trim().length === 0)) ||
+			(state.artifactHash !== undefined &&
+				(typeof state.artifactHash !== "string" ||
+					state.artifactHash.trim().length === 0)) ||
+			(state.lastError !== undefined && typeof state.lastError !== "string")
 		) {
 			throw new AutonomyStoreError(`Autonomy ${source} has an invalid shape`);
 		}
+
+		const gateIds = new Set<string>();
+		for (const gate of state.gates as unknown[]) {
+			if (
+				!this.isValidGateRecord(gate, state.attempt, state.artifactRevision) ||
+				gateIds.has(gate.id)
+			) {
+				throw new AutonomyStoreError(
+					`Autonomy ${source} has an invalid gate record`,
+				);
+			}
+			gateIds.add(gate.id);
+		}
+		if (
+			state.status === "succeeded" &&
+			state.gates.some((gate) => gate.status !== "pass")
+		) {
+			throw new AutonomyStoreError(
+				`Autonomy ${source} succeeded without passing every gate`,
+			);
+		}
+	}
+
+	private isValidGateRecord(
+		value: unknown,
+		attempt: number,
+		artifactRevision: number,
+	): value is AutonomyGateRecord {
+		if (typeof value !== "object" || value === null) return false;
+		const gate = value as Partial<AutonomyGateRecord>;
+		if (
+			typeof gate.id !== "string" ||
+			gate.id.trim().length === 0 ||
+			typeof gate.label !== "string" ||
+			gate.label.trim().length === 0 ||
+			!["pending", "pass", "fail"].includes(gate.status ?? "") ||
+			gate.attempt !== attempt ||
+			gate.artifactRevision !== artifactRevision ||
+			typeof gate.requirement !== "object" ||
+			gate.requirement === null
+		) {
+			return false;
+		}
+
+		const requirement = gate.requirement;
+		let expectedReporter: AutonomyGateRecord["reporter"];
+		switch (requirement.kind) {
+			case "native-goal":
+				expectedReporter = "native-goal-event";
+				break;
+			case "command":
+				expectedReporter = "host-verifier";
+				break;
+			case "evalfly":
+				if (
+					typeof requirement.suite !== "string" ||
+					!["smoke", "regression", "benchmark"].includes(requirement.suite) ||
+					typeof requirement.commitRange !== "string" ||
+					requirement.commitRange.trim().length === 0 ||
+					typeof requirement.activatedAt !== "string" ||
+					!Number.isFinite(Date.parse(requirement.activatedAt))
+				) {
+					return false;
+				}
+				expectedReporter = "evalfly-adapter";
+				break;
+			case "specsafe":
+				if (
+					typeof requirement.sliceId !== "string" ||
+					requirement.sliceId.trim().length === 0
+				) {
+					return false;
+				}
+				expectedReporter = "specsafe-adapter";
+				break;
+			default:
+				return false;
+		}
+
+		if (gate.status === "pending") {
+			return (
+				gate.reporter === undefined &&
+				gate.evidence === undefined &&
+				gate.updatedAt === undefined
+			);
+		}
+		return (
+			gate.reporter === expectedReporter &&
+			typeof gate.evidence === "string" &&
+			gate.evidence.trim().length > 0 &&
+			typeof gate.updatedAt === "string" &&
+			Number.isFinite(Date.parse(gate.updatedAt))
+		);
 	}
 }

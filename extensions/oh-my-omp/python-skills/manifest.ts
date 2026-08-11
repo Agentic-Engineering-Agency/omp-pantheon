@@ -165,3 +165,19 @@ export function validatePythonSkillManifest(
 		output: validateContract(record.output, "output"),
 	};
 }
+
+export function validatePythonSkillManifests(
+	values: readonly unknown[],
+): PythonSkillManifest[] {
+	const manifests = values.map(validatePythonSkillManifest);
+	const ids = new Set<string>();
+	for (const manifest of manifests) {
+		if (ids.has(manifest.id)) {
+			throw new PythonSkillManifestError(
+				`Python skill collection contains duplicate skill id: ${manifest.id}`,
+			);
+		}
+		ids.add(manifest.id);
+	}
+	return manifests;
+}

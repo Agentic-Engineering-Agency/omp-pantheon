@@ -25,6 +25,39 @@ export interface AutonomyControllerOptions {
 	createId?: () => string;
 }
 
+function resetGate(
+	gate: AutonomyGateRecord,
+	attempt: number,
+	artifactRevision: number,
+): AutonomyGateRecord {
+	return {
+		id: gate.id,
+		label: gate.label,
+		requirement: gate.requirement,
+		status: "pending",
+		attempt,
+		artifactRevision,
+	};
+}
+
+function hasValidGateRequirement(
+	requirement: AutonomyGateRecord["requirement"],
+): boolean {
+	switch (requirement.kind) {
+		case "native-goal":
+		case "command":
+			return true;
+		case "evalfly":
+			return (
+				["smoke", "regression", "benchmark"].includes(requirement.suite) &&
+				requirement.commitRange.trim().length > 0 &&
+				Number.isFinite(Date.parse(requirement.activatedAt))
+			);
+		case "specsafe":
+			return requirement.sliceId.trim().length > 0;
+	}
+}
+
 export class AutonomyController {
 	private readonly now: () => string;
 	private readonly createId: () => string;
@@ -68,11 +101,14 @@ export class AutonomyController {
 		if (
 			gateIds.size !== args.gates.length ||
 			args.gates.some(
-				(gate) => gate.id.trim().length === 0 || gate.label.trim().length === 0,
+				(gate) =>
+					gate.id.trim().length === 0 ||
+					gate.label.trim().length === 0 ||
+					!hasValidGateRequirement(gate.requirement),
 			)
 		) {
 			throw new AutonomyTransitionError(
-				"Autonomy gate IDs and labels must be non-empty and unique",
+				"Autonomy gate IDs, labels, and requirements must be valid and unique",
 			);
 		}
 
@@ -152,8 +188,15 @@ export class AutonomyController {
 				`Unknown autonomy gate: ${args.gateId}`,
 			);
 		}
+		const requirement = state.gates[gateIndex]?.requirement;
 		const expectedReporter =
-			args.gateId === "native-goal" ? "native-goal-event" : "host-verifier";
+			requirement?.kind === "native-goal"
+				? "native-goal-event"
+				: requirement?.kind === "evalfly"
+					? "evalfly-adapter"
+					: requirement?.kind === "specsafe"
+						? "specsafe-adapter"
+						: "host-verifier";
 		if (args.reporter !== expectedReporter) {
 			throw new AutonomyTransitionError(
 				`Autonomy gate ${args.gateId} requires reporter ${expectedReporter}`,
@@ -198,13 +241,9 @@ export class AutonomyController {
 			status: "running",
 			artifactRevision,
 			artifactHash: artifactHash.trim(),
-			gates: state.gates.map((gate) => ({
-				id: gate.id,
-				label: gate.label,
-				status: "pending",
-				attempt: state.attempt,
-				artifactRevision,
-			})),
+			gates: state.gates.map((gate) =>
+				resetGate(gate, state.attempt, artifactRevision),
+			),
 			updatedAt: timestamp,
 		});
 	}
@@ -255,13 +294,9 @@ export class AutonomyController {
 			...state,
 			status: "running",
 			attempt,
-			gates: state.gates.map((gate) => ({
-				id: gate.id,
-				label: gate.label,
-				status: "pending",
-				attempt,
-				artifactRevision: state.artifactRevision,
-			})),
+			gates: state.gates.map((gate) =>
+				resetGate(gate, attempt, state.artifactRevision),
+			),
 			updatedAt: timestamp,
 			lastError: undefined,
 		});

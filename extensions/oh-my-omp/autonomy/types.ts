@@ -8,11 +8,27 @@ export type AutonomyStatus =
 	| "cancelled";
 
 export type AutonomyGateStatus = "pending" | "pass" | "fail";
-export type AutonomyGateReporter = "native-goal-event" | "host-verifier";
+export type AutonomyGateReporter =
+	| "native-goal-event"
+	| "host-verifier"
+	| "evalfly-adapter"
+	| "specsafe-adapter";
+
+export type AutonomyGateRequirement =
+	| { kind: "native-goal" }
+	| { kind: "command" }
+	| {
+			kind: "evalfly";
+			suite: "smoke" | "regression" | "benchmark";
+			commitRange: string;
+			activatedAt: string;
+	  }
+	| { kind: "specsafe"; sliceId: string };
 
 export interface AutonomyGateDefinition {
 	id: string;
 	label: string;
+	requirement: AutonomyGateRequirement;
 }
 
 export interface AutonomyGateRecord extends AutonomyGateDefinition {

@@ -9,6 +9,7 @@ import { PythonSkillEnvironment } from "../extensions/oh-my-omp/python-skills/en
 import {
 	PythonSkillManifestError,
 	validatePythonSkillManifest,
+	validatePythonSkillManifests,
 } from "../extensions/oh-my-omp/python-skills/manifest";
 import {
 	PythonSkillRunner,
@@ -69,6 +70,15 @@ describe("Python skill manifest", () => {
 		expect(() => validManifest({ timeoutMs: 0 })).toThrow(
 			PythonSkillManifestError,
 		);
+	});
+
+	test("rejects duplicate skill IDs across a manifest collection", () => {
+		expect(() =>
+			validatePythonSkillManifests([
+				validManifest(),
+				validManifest({ entrypoint: "other.py" }),
+			]),
+		).toThrow("duplicate skill id");
 	});
 });
 

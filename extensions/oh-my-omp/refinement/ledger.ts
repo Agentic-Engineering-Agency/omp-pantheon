@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 import { acquireFileLock } from "../file-lock";
 import {
@@ -222,13 +222,15 @@ export class RefinementLedger {
 			const artifactPath = await this.resolveArtifactPath(proposal);
 			const current = await readFile(artifactPath);
 			const currentHash = this.hashContent(current);
-			if (currentHash === proposal.contentHash) {
-				await this.restoreArtifact(artifactPath, snapshot);
-			} else if (currentHash !== proposal.baseHash) {
+			if (
+				currentHash !== proposal.contentHash &&
+				currentHash !== proposal.baseHash
+			) {
 				throw new RefinementLedgerError(
 					`Cannot roll back ${proposal.id}: artifact hash ${currentHash} matches neither active nor base content`,
 				);
 			}
+			await this.restoreArtifact(artifactPath, snapshot, currentHash);
 			const next = {
 				...proposal,
 				status: "rolled_back" as const,
@@ -418,6 +420,7 @@ export class RefinementLedger {
 	private async restoreArtifact(
 		artifactPath: string,
 		snapshot: RefinementSnapshot,
+		expectedCurrentHash: string,
 	): Promise<void> {
 		await assertNoSymlinkComponents(this.root, artifactPath);
 		const temporaryPath = `${artifactPath}.${randomUUID()}.rollback`;
@@ -430,6 +433,14 @@ export class RefinementLedger {
 					mode: snapshot.mode,
 				},
 			);
+			await chmod(temporaryPath, snapshot.mode);
+			await assertNoSymlinkComponents(this.root, artifactPath);
+			const currentHash = this.hashContent(await readFile(artifactPath));
+			if (currentHash !== expectedCurrentHash) {
+				throw new RefinementLedgerError(
+					`Cannot roll back snapshot: artifact changed during restoration (${currentHash})`,
+				);
+			}
 			await assertNoSymlinkComponents(this.root, artifactPath);
 			await rename(temporaryPath, artifactPath);
 		} finally {

@@ -37,8 +37,16 @@ async function startRun(controller: AutonomyController, maxAttempts = 3) {
 		maxAttempts,
 		verificationCommand: "bun test",
 		gates: [
-			{ id: "native-goal", label: "OMP native goal" },
-			{ id: "verification", label: "Targeted verification" },
+			{
+				id: "native-goal",
+				label: "OMP native goal",
+				requirement: { kind: "native-goal" },
+			},
+			{
+				id: "verification",
+				label: "Targeted verification",
+				requirement: { kind: "command" },
+			},
 		],
 	});
 }
@@ -66,6 +74,30 @@ describe("AutonomyController", () => {
 			"pending",
 		]);
 		expect(await store.load()).toEqual(started);
+	});
+
+	test("rejects malformed external gate requirements", async () => {
+		const { controller } = await createHarness();
+
+		await expect(
+			controller.start({
+				task: "Ship verified autonomy",
+				maxAttempts: 3,
+				verificationCommand: "bun test",
+				gates: [
+					{
+						id: "evalfly",
+						label: "EvalFly",
+						requirement: {
+							kind: "evalfly",
+							suite: "smoke",
+							commitRange: "",
+							activatedAt: "not-a-date",
+						},
+					},
+				],
+			}),
+		).rejects.toThrow("requirements");
 	});
 
 	test("never treats model completion text as completion evidence", async () => {
@@ -200,7 +232,13 @@ describe("AutonomyController", () => {
 			task: "Ship the next verified goal",
 			maxAttempts: 2,
 			verificationCommand: "bun test",
-			gates: [{ id: "verification", label: "Targeted verification" }],
+			gates: [
+				{
+					id: "verification",
+					label: "Targeted verification",
+					requirement: { kind: "command" },
+				},
+			],
 		});
 
 		expect(started).toMatchObject({
@@ -253,6 +291,29 @@ describe("AutonomyStore", () => {
 		);
 
 		await expect(store.load()).rejects.toThrow("journal");
+	});
+
+	test("rejects forged reporter evidence in a persisted gate", async () => {
+		const { controller, store } = await createHarness();
+		const started = await startRun(controller);
+		const forged = {
+			...started,
+			revision: 2,
+			gates: started.gates.map((gate, index) =>
+				index === 0
+					? {
+							...gate,
+							status: "pass" as const,
+							reporter: "host-verifier" as const,
+							evidence: "forged",
+							updatedAt: "2026-08-11T12:00:01.000Z",
+						}
+					: gate,
+			),
+			updatedAt: "2026-08-11T12:00:01.000Z",
+		};
+
+		await expect(store.save(forged, 1)).rejects.toThrow("gate record");
 	});
 
 	test("rejects stale concurrent saves without corrupting journal continuity", async () => {

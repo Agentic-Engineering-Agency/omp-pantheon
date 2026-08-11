@@ -11,6 +11,7 @@ import type {
 import { type AgentdStatus, AutonomyAgentd } from "./agentd";
 import { registerAutonomyCommands } from "./commands";
 import { AutonomyController, AutonomyTransitionError } from "./controller";
+import { configuredAutonomyGates, evaluateConfiguredHostGates } from "./gates";
 import { CommandJournal } from "./journal";
 import {
 	prepareAutonomyProjectStateRoot,
@@ -138,10 +139,7 @@ export class AutonomyRuntime {
 			task,
 			maxAttempts,
 			verificationCommand,
-			gates: [
-				{ id: "native-goal", label: "OMP native goal" },
-				{ id: "verification", label: "Trusted verification command" },
-			],
+			gates: configuredAutonomyGates(this.cwd ?? ""),
 		});
 		await this.agentd?.start(state.id);
 		return state;
@@ -272,6 +270,13 @@ export class AutonomyRuntime {
 		const state = await controller.get();
 		if (state === null || ACTIVE_STATUSES[state.status] !== true) return;
 
+		for (const receipt of evaluateConfiguredHostGates(this.cwd ?? "", state)) {
+			await controller.recordGate({
+				...receipt,
+				attempt: state.attempt,
+				artifactRevision: state.artifactRevision,
+			});
+		}
 		const decision = await controller.evaluateCompletion();
 		if (decision.completed) {
 			this.pi.logger.info(

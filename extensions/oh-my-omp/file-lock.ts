@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, open, readFile, rm, stat } from "node:fs/promises";
+import { chmod, lstat, open, readFile, rm, stat } from "node:fs/promises";
 
 import { Database } from "bun:sqlite";
 
@@ -44,6 +44,21 @@ function databaseIsLocked(error: unknown): boolean {
 	);
 }
 
+async function assertGuardDatabasePath(path: string): Promise<void> {
+	try {
+		const metadata = await lstat(path);
+		if (metadata.isSymbolicLink()) {
+			throw new FileLockError(`Refusing symbolic link SQLite guard: ${path}`);
+		}
+		if (!metadata.isFile()) {
+			throw new FileLockError(`SQLite guard must be a regular file: ${path}`);
+		}
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw error;
+	}
+}
+
 function releaseGuard(database: Database): void {
 	try {
 		database.exec("ROLLBACK");
@@ -53,14 +68,17 @@ function releaseGuard(database: Database): void {
 }
 
 async function acquireGuard(path: string): Promise<Database | null> {
-	const database = new Database(`${path}.guard.sqlite`, {
+	const guardPath = `${path}.guard.sqlite`;
+	await assertGuardDatabasePath(guardPath);
+	const database = new Database(guardPath, {
 		create: true,
 		strict: true,
 	});
 	try {
+		await assertGuardDatabasePath(guardPath);
 		database.exec("PRAGMA busy_timeout = 0");
 		database.exec("BEGIN IMMEDIATE");
-		await chmod(`${path}.guard.sqlite`, 0o600);
+		await chmod(guardPath, 0o600);
 		return database;
 	} catch (error) {
 		database.close();

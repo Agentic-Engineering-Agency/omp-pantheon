@@ -55,7 +55,7 @@ The target failure modes are:
 | Local enforcement | Block local session completion when explicit EvalFly evidence is required and missing. | Implemented; activated per project with `evalfly enforce start`. |
 | CI enforcement | Reject PRs without EvalFly check evidence. | Template exists; consuming repos must install workflow and branch protection. |
 | Branch E2E | Verify real user behavior through UI/backend/log/network evidence and negative cases. | Implemented as `agentic-branch-e2e` skill/protocol; not yet automatically imported into EvalFly. |
-| Verified autonomy | Keep an objective running across agent/process boundaries without trusting completion prose. | Implemented as opt-in `/autonomy`, native-goal and verification gates, durable journals, scheduler generations, and broker-managed `pantheon-agentd`. |
+| Verified autonomy | Keep an objective running across agent/process boundaries without trusting completion prose. | Implemented as opt-in `/autonomy`, core native-goal and targeted-command gates, conditional exact EvalFly/SpecSafe adapters, durable journals, scheduler generations, and broker-managed `pantheon-agentd`. |
 | Refinement | Validate and approve proposed harness changes before activation. | Implemented as an append-only checksummed ledger with conflict, quarantine, and rollback states. |
 | Python skills | Run skill-local Python with reproducible dependencies and explicit bounds. | Implemented with exact pins, content-addressed virtual environments, JSON contracts, and fail-closed network denial. |
 
@@ -85,7 +85,7 @@ A non-trivial issue should move through these stages:
 7. Evidence
    Run tests and EvalFly; produce run JSON and canonical markdown report.
    Optional `/autonomy` mode keeps the objective alive across session worker
-   restarts and requires current native-goal plus verification evidence.
+   restarts and requires current core gates plus any EvalFly/SpecSafe contract captured at start.
 
 8. Trace hygiene
    Import/normalize/audit sanitized traces when execution evidence matters.

@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -49,5 +56,17 @@ describe("acquireFileLock", () => {
 
 		expect(maximumActive).toBe(1);
 		expect(await Bun.file(`${lockPath}.breaker`).exists()).toBe(false);
+	});
+
+	test("rejects a symbolic-link SQLite guard without touching its target", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pantheon-file-lock-"));
+		roots.push(root);
+		const lockPath = join(root, "state.lock");
+		const outside = join(root, "outside.sqlite");
+		await writeFile(outside, "sentinel");
+		await symlink(outside, `${lockPath}.guard.sqlite`);
+
+		await expect(acquireFileLock(lockPath)).rejects.toThrow("symbolic link");
+		expect(await readFile(outside, "utf8")).toBe("sentinel");
 	});
 });

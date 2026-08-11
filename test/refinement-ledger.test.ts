@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import {
+	chmod,
 	mkdir,
 	mkdtemp,
 	readFile,
 	rm,
+	stat,
 	symlink,
 	writeFile,
 } from "node:fs/promises";
@@ -139,15 +141,18 @@ describe("RefinementLedger", () => {
 	test("restores the snapshotted artifact on rollback", async () => {
 		const { ledger, root } = await createLedger();
 		const artifactPath = join(root, "skills", "review", "SKILL.md");
+		await chmod(artifactPath, 0o764);
 		const proposal = await propose(ledger);
 		await ledger.validate(proposal.id, "evalfly:report-42");
 		await ledger.approve(proposal.id, "user:sebastian");
 		await ledger.activate(proposal.id, BASE_HASH);
 		await writeFile(artifactPath, CANDIDATE_CONTENT);
+		await chmod(artifactPath, 0o600);
 		const rolledBack = await ledger.rollback(proposal.id, "regression");
 
 		expect(rolledBack.status).toBe("rolled_back");
 		expect(await readFile(artifactPath, "utf8")).toBe(BASE_CONTENT);
+		expect((await stat(artifactPath)).mode & 0o777).toBe(0o764);
 	});
 
 	test("rejects traversal paths and invalid transitions", async () => {
@@ -170,16 +175,19 @@ describe("RefinementLedger", () => {
 	test("finishes rollback after artifact restoration but before ledger append", async () => {
 		const { ledger, root } = await createLedger();
 		const artifactPath = join(root, "skills", "review", "SKILL.md");
+		await chmod(artifactPath, 0o764);
 		const proposal = await propose(ledger);
 		await ledger.validate(proposal.id, "evalfly:report-42");
 		await ledger.approve(proposal.id, "user:sebastian");
 		await ledger.activate(proposal.id, BASE_HASH);
 		await writeFile(artifactPath, BASE_CONTENT);
+		await chmod(artifactPath, 0o600);
 
 		const rolledBack = await ledger.rollback(proposal.id, "resume rollback");
 
 		expect(rolledBack.status).toBe("rolled_back");
 		expect(await readFile(artifactPath, "utf8")).toBe(BASE_CONTENT);
+		expect((await stat(artifactPath)).mode & 0o777).toBe(0o764);
 	});
 
 	test("refuses rollback when active content drifted", async () => {

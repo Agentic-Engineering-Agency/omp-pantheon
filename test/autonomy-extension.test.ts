@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,7 @@ import {
 import { PersistedScheduler } from "../extensions/oh-my-omp/autonomy/scheduler";
 import { AutonomyStore } from "../extensions/oh-my-omp/autonomy/store";
 import registerPantheon from "../extensions/oh-my-omp/index";
+import { writeEvalFlyEnforcementState } from "../skills/evalfly/bin/enforcement-state";
 
 interface RegisteredCommand {
 	description?: string;
@@ -42,6 +43,66 @@ interface FakeContext {
 type EventHandler = (event: unknown, ctx: FakeContext) => Promise<void> | void;
 
 const roots: string[] = [];
+
+async function writePassingEvalFlyRun(cwd: string): Promise<void> {
+	const runId = "autonomy-gate-pass";
+	const reportPath = `evals/reports/${runId}.md`;
+	const result = {
+		case_id: "autonomy-gate",
+		title: "Autonomy gate",
+		risk_tier: "major",
+		critical: false,
+		passed: true,
+		privacy: { classification: "internal", sanitized: true },
+		errors: [],
+	};
+	const run = {
+		schema_version: "evalfly.run.v1",
+		run_id: runId,
+		suite: "smoke",
+		config_name: "autonomy-test",
+		created_at: "2026-08-11T22:00:01.000Z",
+		context: {
+			eval_report_path: reportPath,
+			commit_range: "main..HEAD",
+		},
+		results: [result],
+		summary: {
+			total: 1,
+			passed: 1,
+			failed: 0,
+			critical_regressions: 0,
+		},
+		verdict: "pass",
+	};
+	const report = [
+		`# EvalFly Report ${runId}`,
+		"",
+		"Suite: smoke",
+		"Verdict: pass",
+		"Passed: 1",
+		"Failed: 0",
+		"critical_regressions: 0",
+		"Privacy: sanitized",
+		"",
+		"## Context",
+		"Spec-Slice: not linked",
+		"Session: not linked",
+		"Commit range: main..HEAD",
+		`evalReportPath: ${reportPath}`,
+		"",
+		"## Results",
+		"- PASS autonomy-gate (major)",
+		"",
+	].join("\n");
+	await mkdir(join(cwd, "evals", "runs"), { recursive: true });
+	await mkdir(join(cwd, "evals", "reports"), { recursive: true });
+	await writeFile(
+		join(cwd, "evals", "runs", `${runId}.json`),
+		`${JSON.stringify(run)}\n`,
+	);
+	await writeFile(join(cwd, reportPath), report);
+}
 const registerTestAutonomy = (pi: never): unknown =>
 	registerAutonomy(pi, {
 		async verify(_cwd, command) {
@@ -189,6 +250,196 @@ describe("autonomy extension", () => {
 		expect(logs).toContain(
 			"Autonomy run succeeded after objective gates passed",
 		);
+	});
+
+	test("records passing EvalFly enforcement through a host gate adapter", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-evalfly-"));
+		roots.push(cwd);
+		writeEvalFlyEnforcementState(cwd, {
+			mode: "enforced",
+			suite: "smoke",
+			commitRange: "main..HEAD",
+			activatedAt: "2026-08-11T22:00:00.000Z",
+			activatedBy: "test",
+		});
+		await writePassingEvalFlyRun(cwd);
+		const extension = await createFakeExtension(registerTestAutonomy, { cwd });
+		await extension.commands.autonomy?.handler(
+			'start "Ship with EvalFly" --max-attempts=2',
+			extension.ctx,
+		);
+		await extension.commands.autonomy?.handler("status", extension.ctx);
+		expect(extension.notifications.at(-1)).toContain("evalfly=pending");
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "goal-evalfly",
+					objective: "Ship with EvalFly",
+					status: "active",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "goal-evalfly",
+					objective: "Ship with EvalFly",
+					status: "complete",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.tools.autonomy_gate?.execute(
+			"verify-evalfly",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		await extension.handlers.agent_end?.[0]?.({}, extension.ctx);
+
+		expect(extension.logs).toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+	});
+
+	test("records closure of the exact SpecSafe slice through a host gate adapter", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-specsafe-"));
+		roots.push(cwd);
+		const statePath = join(cwd, ".pi", ".specsafe-state.json");
+		await mkdir(join(cwd, ".pi"), { recursive: true });
+		await writeFile(
+			statePath,
+			JSON.stringify({
+				currentSlice: {
+					id: "SPEC-AUTONOMY",
+					workspaceId: "workspace",
+					sessionId: "session",
+					beganAt: "2026-08-11T22:00:00.000Z",
+					costCounter: {},
+				},
+				history: [],
+			}),
+		);
+		const extension = await createFakeExtension(registerTestAutonomy, { cwd });
+		await extension.commands.autonomy?.handler(
+			'start "Ship with SpecSafe" --max-attempts=2',
+			extension.ctx,
+		);
+		await extension.commands.autonomy?.handler("status", extension.ctx);
+		expect(extension.notifications.at(-1)).toContain("specsafe=pending");
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "goal-specsafe",
+					objective: "Ship with SpecSafe",
+					status: "active",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "goal-specsafe",
+					objective: "Ship with SpecSafe",
+					status: "complete",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.tools.autonomy_gate?.execute(
+			"verify-specsafe",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		await writeFile(
+			statePath,
+			JSON.stringify({
+				currentSlice: null,
+				history: [
+					{
+						sliceId: "SPEC-AUTONOMY",
+						outcome: "PASS",
+						endedAt: "2026-08-11T22:00:02.000Z",
+					},
+				],
+			}),
+		);
+		await extension.handlers.agent_end?.[0]?.({}, extension.ctx);
+
+		expect(extension.logs).toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+	});
+
+	test("fails closed when configured EvalFly evidence is unavailable", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-evalfly-"));
+		roots.push(cwd);
+		writeEvalFlyEnforcementState(cwd, {
+			mode: "enforced",
+			suite: "smoke",
+			commitRange: "main..HEAD",
+			activatedAt: "2026-08-11T22:00:00.000Z",
+			activatedBy: "test",
+		});
+		const extension = await createFakeExtension(registerTestAutonomy, { cwd });
+		await extension.commands.autonomy?.handler(
+			'start "Ship without evidence" --max-attempts=2',
+			extension.ctx,
+		);
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "goal-missing-eval",
+					objective: "Ship without evidence",
+					status: "active",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "goal-missing-eval",
+					objective: "Ship without evidence",
+					status: "complete",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.tools.autonomy_gate?.execute(
+			"verify-missing-eval",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		await extension.handlers.agent_end?.[0]?.({}, extension.ctx);
+
+		expect(extension.logs).not.toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+		expect(extension.messages.at(-1)).toContain("evalfly");
+	});
+
+	test("rejects malformed configured gate state before starting", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-gates-"));
+		roots.push(cwd);
+		await mkdir(join(cwd, ".pi", "evalfly"), { recursive: true });
+		await writeFile(join(cwd, ".pi", "evalfly", "enforcement.json"), "{bad");
+		const extension = await createFakeExtension(registerTestAutonomy, { cwd });
+
+		await extension.commands.autonomy?.handler(
+			'start "Unsafe state"',
+			extension.ctx,
+		);
+
+		expect(extension.notifications.at(-1)).toStartWith("error:");
+		expect(extension.messages).toHaveLength(0);
 	});
 
 	test("binds the native gate to the matching active goal and ignores unrelated completion", async () => {

@@ -27,12 +27,16 @@ No global daemon is installed. Starting an autonomy run asks OMP's launch broker
 
 ## Completion contract
 
-The default run has two gates:
+Every run always has two core gates and conditionally freezes the active project contracts at start:
 
 1. `native-goal`: Pantheon first binds the ID of an `active` native OMP goal whose objective exactly matches the autonomy task. It records a pass only when OMP later emits `complete` for that same ID. Unrelated goals are ignored.
 2. `verification`: `autonomy_gate` accepts no evidence parameters. It asks the host runner to execute the command frozen by `/autonomy start --verify=...` and records the observed exit status.
+3. `evalfly`: when EvalFly enforcement is active at start, Pantheon captures its suite, commit range, and activation time. The adapter requires a canonical passing run/report that exactly matches that contract and is newer than activation. Disabling or replacing the captured enforcement contract does not waive the gate.
+4. `specsafe`: when an exact SpecSafe slice is open at start, Pantheon captures its slice ID. The adapter passes only after that same slice appears in history with `PASS`; a different, missing, failed, or abandoned slice does not satisfy it.
 
-Every required gate must pass for the same attempt and artifact revision. Gate reporters are fixed by type (`native-goal-event` or `host-verifier`); model-supplied evidence cannot substitute for either. Every potentially mutating tool result advances the artifact revision and resets all gates, whether that tool reports success or failure. Only known read-only tools (`read`, `grep`, and `glob`) plus the `goal` control tool and `autonomy_gate` are exempt. Unknown tools are treated as mutating, so verification must run after the last mutation. A failed or missing gate causes another bounded attempt; exhausting `maxAttempts` records a terminal failure with evidence.
+Configured EvalFly and SpecSafe adapters refresh at `agent_end` before completion is evaluated. Malformed configured state rejects `/autonomy start`; unavailable, stale, or mismatched evidence fails closed.
+
+Every required gate must pass for the same attempt and artifact revision. Gate reporters are fixed by type (`native-goal-event`, `host-verifier`, `evalfly-adapter`, or `specsafe-adapter`); model-supplied evidence cannot substitute for them. Every potentially mutating tool result advances the artifact revision and resets all gates, whether that tool reports success or failure. Only known read-only tools (`read`, `grep`, and `glob`) plus the `goal` control tool and `autonomy_gate` are exempt. Unknown tools are treated as mutating, so verification must run after the last mutation. A failed or missing gate causes another bounded attempt; exhausting `maxAttempts` records a terminal failure with evidence.
 
 Model prose is never completion evidence. `<promise>DONE</promise>`, similar markers, and an `agent_end` event cannot complete a run by themselves.
 
@@ -102,6 +106,7 @@ Python skills run under a manifest contract:
 - content-addressed virtual environment cache with stale-owner lock recovery;
 - bounded provisioning subprocesses with a scrubbed environment;
 - `network: deny` fails closed unless a network sandbox adapter is available, and uncached dependencies are never installed for a network-denied skill.
+- duplicate skill IDs are rejected across a loaded manifest collection.
 
 The environment hash includes the Python requirement and sorted dependency pins. A second run with the same contract reuses the existing environment. The manifest cannot self-authorize access to host secrets.
 
