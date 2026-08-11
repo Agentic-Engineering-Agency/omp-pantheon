@@ -34,9 +34,11 @@ agentic engineering cockpit:
   slice/session hooks.
 - **Honcho memory**: durable recall/search/conclusion tools wired into the OMP
   extension layer when configured.
-- **Loop runtime and guardrails**: Ralph/ULW continuation commands, todo
-  enforcement, intent gate, comment checker, `i-approve`, fallback audit, and
-  SpecSafe subagent/session hooks.
+- **Verified autonomy and guardrails**: opt-in `/autonomy` execution with
+  objective completion gates, durable continuation, todo enforcement, intent
+  gate, comment checker, `i-approve`, fallback audit, and SpecSafe
+  subagent/session hooks. `/ulw` and `/ultrawork` remain prompt-only
+  orchestration commands; they do not own persistence or completion.
 - **EvalFly evidence and enforcement**: `evaluation-flywheel` guidance plus the
   `evalfly` template/CLI for deterministic smoke evidence, run/report artifacts,
   sanitized trace import/normalization/audit, compare/summary/report commands,
@@ -53,8 +55,9 @@ behavior.
 ## Commands in the bundle
 
 `/ulw`, `/ultrawork`, `/init-deep`, `/refactor`, `/handoff`, `/start-work`,
-`/remove-ai-slops`, `/evalfly-enforce`, `/omomomo`, plus extension commands
-`/ralph-loop`, `/ulw-loop`, `/cancel-ralph`, and `/stop-continuation`.
+`/remove-ai-slops`, `/evalfly-enforce`, `/omomomo`, plus `/autonomy start`,
+`/autonomy status`, `/autonomy pause`, `/autonomy resume`, `/autonomy cancel`,
+and `/autonomy explain`.
 
 ## Who made this lineage?
 

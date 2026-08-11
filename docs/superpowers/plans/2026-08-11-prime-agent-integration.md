@@ -13,7 +13,7 @@
 ## Global constraints
 
 - Preserve OMP's existing discovery contracts for agents, skills, commands, hooks, extensions, and MCP servers.
-- Keep all new autonomy opt-in and project-local. Default OMP/Pantheon behavior must remain unchanged.
+- Keep all new autonomy opt-in and project-scoped, with operational state in private per-user storage. Default OMP/Pantheon behavior must remain unchanged.
 - Replace the Ralph/ULW loop runtime; do not keep two competing autonomous-loop conventions.
 - Treat model text, completion promises, and agent self-assessment as evidence only. They can never satisfy a completion gate by themselves.
 - Reuse OMP native goals, SDK sessions, `eval`, `agent`, Task/Hub, and the launch broker. Do not copy Prime's single-notebook tool surface or fork its Pi packages.
@@ -31,16 +31,16 @@ Create or modify these units:
 - Modify: `package.json`, `extensions/oh-my-omp/package.json`, `bun.lock` — align the extension contract with OMP 17.2.14.
 - Create: `test/omp-version-contract.test.ts` — prevent root/extension dependency drift.
 - Create: `extensions/oh-my-omp/autonomy/types.ts` — durable goal, gate, attempt, schedule, and worker contracts.
-- Create: `extensions/oh-my-omp/autonomy/store.ts` — atomic project-local state and append-only event journal.
+- Create: `extensions/oh-my-omp/autonomy/store.ts` — atomic private per-user state and append-only event journal.
 - Create: `extensions/oh-my-omp/autonomy/controller.ts` — state transitions and completion-gate decisions.
 - Create: `extensions/oh-my-omp/autonomy/scheduler.ts` — persisted deadlines, lease claims, coalescing, and retry policy.
 - Create: `extensions/oh-my-omp/autonomy/agentd.ts` — resident SDK worker resumed by the OMP launch broker.
 - Create: `extensions/oh-my-omp/autonomy/checkpoints.ts` — safe kernel-checkpoint capability adapter.
 - Create: `extensions/oh-my-omp/autonomy/retained-agents.ts` — retained-subagent capability adapter.
-- Create: `extensions/oh-my-omp/autonomy/commands.ts` — `/autonomy` start/status/pause/resume/stop/explain UX.
+- Create: `extensions/oh-my-omp/autonomy/commands.ts` — `/autonomy` start/status/pause/resume/cancel/explain UX.
 - Create: `extensions/oh-my-omp/refinement/ledger.ts` — proposal, approval, activation, rollback, conflict, and quarantine ledger.
 - Create: `extensions/oh-my-omp/python-skills/manifest.ts` — declarative Python runtime contract and validation.
-- Create: `extensions/oh-my-omp/python-skills/environment.ts` — content-addressed virtualenv provisioning with locks.
+- Create: `extensions/oh-my-omp/python-skills/environment.ts` — private per-user content-addressed virtualenv provisioning with locks.
 - Create: `extensions/oh-my-omp/python-skills/runner.ts` — bounded JSON request/response subprocess runner.
 - Modify: `extensions/oh-my-omp/index.ts` — register the new controller and commands after tests pass.
 - Remove: `extensions/oh-my-omp/loop/runtime.ts`, `state.ts`, `commands.ts`, `promise-detector.ts` — clean cutover from Ralph/ULW.
@@ -200,7 +200,7 @@ Create or modify these units:
 - Modify: `UPDATE-LOG.md`
 - Create: `docs/autonomy.md`
 
-- [ ] Document opt-in setup, commands, project-local state paths, gate semantics, worker lifecycle, refinement approvals, Python skill policy, and recovery.
+- [ ] Document opt-in setup, commands, private autonomy/receipt/Python state paths, project-local refinement state, gate semantics, worker lifecycle, refinement approvals, Python skill policy, and recovery.
 - [ ] Document Ralph/ULW runtime removal and the `/autonomy` replacement path.
 - [ ] Attribute Prime Agent ideas precisely; distinguish adapted concepts from copied code.
 - [ ] Document unsupported checkpoint/retained-agent capabilities until the minimum upstream OMP version ships them.

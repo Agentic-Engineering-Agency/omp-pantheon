@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
 	chmod,
+	link,
 	mkdir,
 	mkdtemp,
 	readFile,
@@ -326,6 +327,22 @@ describe("Python skill runner", () => {
 		await expect(
 			runner.run(root, validManifest(), { message: "hello" }),
 		).rejects.toThrow("symbolic link");
+	});
+
+	test("rejects a hardlinked entrypoint", async () => {
+		if (!pythonPath) throw new Error("python3 is required for this test");
+		const root = await createRoot();
+		const outside = await createRoot();
+		const outsideEntrypoint = join(outside, "outside.py");
+		await writeFile(outsideEntrypoint, 'print("{}")\n');
+		await link(outsideEntrypoint, join(root, "main.py"));
+		const runner = new PythonSkillRunner({
+			provision: async () => ({ pythonPath, reused: true }),
+		});
+
+		await expect(
+			runner.run(root, validManifest(), { message: "hello" }),
+		).rejects.toThrow("singly linked");
 	});
 
 	test("kills the Python process tree when execution times out", async () => {

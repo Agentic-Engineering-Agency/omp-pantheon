@@ -138,9 +138,9 @@ async function resolveSafeEntrypoint(
 		"Python skill entrypoint",
 	);
 	const entrypointMetadata = await lstat(entrypoint);
-	if (!entrypointMetadata.isFile()) {
+	if (!entrypointMetadata.isFile() || entrypointMetadata.nlink !== 1) {
 		throw new PythonSkillRunnerError(
-			"Python skill entrypoint must be a regular file",
+			"Python skill entrypoint must be a singly linked regular file",
 		);
 	}
 	const realEntrypoint = await realpath(entrypoint);
