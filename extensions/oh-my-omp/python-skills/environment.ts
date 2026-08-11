@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, rename, rm } from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
+import { mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
+
+import { acquireFileLock } from "../file-lock";
 
 import type { PythonSkillManifest } from "./manifest";
 
@@ -17,8 +18,8 @@ export interface PythonEnvironmentProvider {
 }
 
 export class PythonSkillEnvironmentError extends Error {
-	constructor(message: string) {
-		super(message);
+	constructor(message: string, options?: ErrorOptions) {
+		super(message, options);
 		this.name = "PythonSkillEnvironmentError";
 	}
 }
@@ -26,12 +27,16 @@ export class PythonSkillEnvironmentError extends Error {
 export interface PythonSkillEnvironmentOptions {
 	pythonPath?: string;
 	lockTimeoutMs?: number;
+	staleLockMs?: number;
+	provisioningTimeoutMs?: number;
 }
 
 export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 	private readonly root: string;
 	private readonly pythonPath: string;
 	private readonly lockTimeoutMs: number;
+	private readonly staleLockMs: number;
+	private readonly provisioningTimeoutMs: number;
 
 	constructor(
 		projectRoot: string,
@@ -40,6 +45,8 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 		this.root = join(projectRoot, ".pi", "python-skills", "venvs");
 		this.pythonPath = options.pythonPath ?? "python3";
 		this.lockTimeoutMs = options.lockTimeoutMs ?? 30_000;
+		this.staleLockMs = options.staleLockMs ?? 5 * 60_000;
+		this.provisioningTimeoutMs = options.provisioningTimeoutMs ?? 120_000;
 	}
 
 	async provision(
@@ -64,29 +71,28 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 
 		await mkdir(this.root, { recursive: true });
 		const lockPath = `${environmentPath}.lock`;
-		const deadline = Date.now() + this.lockTimeoutMs;
-		let lock: FileHandle | null = null;
-		while (lock === null) {
-			try {
-				lock = await open(lockPath, "wx");
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-				if (await Bun.file(environmentPython).exists()) {
-					return { pythonPath: environmentPython, reused: true };
-				}
-				if (Date.now() >= deadline) {
-					throw new PythonSkillEnvironmentError(
-						`Timed out waiting for Python environment ${environmentHash}`,
-					);
-				}
-				await Bun.sleep(25);
-			}
+		let release: () => Promise<void>;
+		try {
+			release = await acquireFileLock(lockPath, {
+				timeoutMs: this.lockTimeoutMs,
+				staleMs: this.staleLockMs,
+			});
+		} catch (error) {
+			throw new PythonSkillEnvironmentError(
+				`Timed out waiting for Python environment ${environmentHash}`,
+				{ cause: error },
+			);
 		}
 
 		const temporaryPath = `${environmentPath}.${randomUUID()}.tmp`;
 		try {
 			if (await Bun.file(environmentPython).exists()) {
 				return { pythonPath: environmentPython, reused: true };
+			}
+			if (manifest.network === "deny" && manifest.dependencies.length > 0) {
+				throw new PythonSkillEnvironmentError(
+					"Cannot provision uncached dependencies for a network-denied Python skill",
+				);
 			}
 			await this.assertPythonVersion(manifest.python);
 			await this.run(
@@ -114,32 +120,20 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 			await rename(temporaryPath, environmentPath);
 			return { pythonPath: environmentPython, reused: false };
 		} finally {
-			await lock.close();
-			await rm(lockPath, { force: true });
+			await release();
 			await rm(temporaryPath, { recursive: true, force: true });
 		}
 	}
 
 	private async assertPythonVersion(requirement: string): Promise<void> {
-		const processHandle = Bun.spawn({
-			cmd: [
+		const { stdout: output } = await this.spawn(
+			[
 				this.pythonPath,
 				"-c",
 				"import sys; print('.'.join(map(str, sys.version_info[:3])))",
 			],
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const [exitCode, output, diagnostics] = await Promise.all([
-			processHandle.exited,
-			new Response(processHandle.stdout).text(),
-			new Response(processHandle.stderr).text(),
-		]);
-		if (exitCode !== 0) {
-			throw new PythonSkillEnvironmentError(
-				`Unable to inspect Python runtime: ${diagnostics.trim()}`,
-			);
-		}
+			"inspect Python runtime",
+		);
 		const [minimum, maximum] = requirement.split(",");
 		const version = output.trim().split(".").map(Number);
 		const lower = minimum?.slice(2).split(".").map(Number) ?? [];
@@ -159,19 +153,56 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 	}
 
 	private async run(command: string[], action: string): Promise<void> {
+		await this.spawn(command, action);
+	}
+
+	private async spawn(
+		command: string[],
+		action: string,
+	): Promise<{ stdout: string; stderr: string }> {
+		const environment: Record<string, string> = {};
+		for (const name of [
+			"HOME",
+			"PATH",
+			"TMPDIR",
+			"TMP",
+			"TEMP",
+			"SYSTEMROOT",
+			"WINDIR",
+		]) {
+			const value = process.env[name];
+			if (value !== undefined) environment[name] = value;
+		}
 		const processHandle = Bun.spawn({
 			cmd: command,
+			env: environment,
 			stdout: "pipe",
 			stderr: "pipe",
 		});
-		const [exitCode, diagnostics] = await Promise.all([
-			processHandle.exited,
-			new Response(processHandle.stderr).text(),
-		]);
-		if (exitCode !== 0) {
-			throw new PythonSkillEnvironmentError(
-				`Failed to ${action}: ${diagnostics.trim()}`,
-			);
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			processHandle.kill("SIGKILL");
+		}, this.provisioningTimeoutMs);
+		try {
+			const [exitCode, stdout, stderr] = await Promise.all([
+				processHandle.exited,
+				new Response(processHandle.stdout).text(),
+				new Response(processHandle.stderr).text(),
+			]);
+			if (timedOut) {
+				throw new PythonSkillEnvironmentError(
+					`Timed out attempting to ${action} after ${this.provisioningTimeoutMs}ms`,
+				);
+			}
+			if (exitCode !== 0) {
+				throw new PythonSkillEnvironmentError(
+					`Failed to ${action}: ${stderr.trim()}`,
+				);
+			}
+			return { stdout, stderr };
+		} finally {
+			clearTimeout(timer);
 		}
 	}
 }

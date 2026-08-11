@@ -95,6 +95,31 @@ describe("RefinementLedger", () => {
 		);
 	});
 
+	test("serializes concurrent activation so one artifact has one active proposal", async () => {
+		const { ledger } = await createLedger();
+		const first = await propose(ledger);
+		const second = await propose(ledger);
+		for (const proposal of [first, second]) {
+			await ledger.validate(proposal.id, `evalfly:${proposal.id}`);
+			await ledger.approve(proposal.id, "user:sebastian");
+		}
+
+		const results = await Promise.allSettled([
+			ledger.activate(first.id, "sha256:base"),
+			ledger.activate(second.id, "sha256:base"),
+		]);
+
+		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
+			1,
+		);
+		expect(results.filter((result) => result.status === "rejected")).toHaveLength(
+			1,
+		);
+		expect((await ledger.list()).filter((item) => item.status === "active")).toHaveLength(
+			1,
+		);
+	});
+
 	test("records rollback without mutating the artifact", async () => {
 		const { ledger, root } = await createLedger();
 		const artifactPath = join(root, "skills", "review", "SKILL.md");

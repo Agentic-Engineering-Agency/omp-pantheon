@@ -16,6 +16,7 @@ export interface PythonNetworkSandbox {
 
 export interface PythonSkillRunnerOptions {
 	environment?: Record<string, string | undefined>;
+	allowedEnvironment?: readonly string[];
 	networkSandbox?: PythonNetworkSandbox;
 }
 
@@ -76,12 +77,14 @@ async function collectBounded(
 export class PythonSkillRunner {
 	private readonly sourceEnvironment: Record<string, string | undefined>;
 	private readonly networkSandbox?: PythonNetworkSandbox;
+	private readonly allowedEnvironment: ReadonlySet<string>;
 
 	constructor(
 		private readonly environmentProvider: PythonEnvironmentProvider,
 		options: PythonSkillRunnerOptions = {},
 	) {
 		this.sourceEnvironment = options.environment ?? process.env;
+		this.allowedEnvironment = new Set(options.allowedEnvironment ?? []);
 		this.networkSandbox = options.networkSandbox;
 	}
 
@@ -129,6 +132,13 @@ export class PythonSkillRunner {
 			PYTHONUNBUFFERED: "1",
 			PANTHEON_NETWORK_POLICY: manifest.network,
 		};
+		for (const name of manifest.environment) {
+			if (!this.allowedEnvironment.has(name)) {
+				throw new PythonSkillRunnerError(
+					`Python skill environment variable is not host-authorized: ${name}`,
+				);
+			}
+		}
 		for (const name of manifest.environment) {
 			const value = this.sourceEnvironment[name];
 			if (value !== undefined) environment[name] = value;

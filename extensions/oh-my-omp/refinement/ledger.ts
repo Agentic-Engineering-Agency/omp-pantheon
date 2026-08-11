@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, sep } from "node:path";
+import { acquireFileLock } from "../file-lock";
 
 import type {
 	CreateRefinementProposal,
@@ -26,12 +27,14 @@ export interface RefinementLedgerOptions {
 
 export class RefinementLedger {
 	private readonly ledgerPath: string;
+	private readonly lockPath: string;
 	private readonly quarantinePath: string;
 	private readonly now: () => string;
 	private readonly createId: () => string;
 
 	constructor(root: string, options: RefinementLedgerOptions = {}) {
 		this.ledgerPath = join(root, LEDGER_PATH);
+		this.lockPath = `${this.ledgerPath}.lock`;
 		this.quarantinePath = join(root, QUARANTINE_PATH);
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.createId = options.createId ?? randomUUID;
@@ -84,24 +87,31 @@ export class RefinementLedger {
 			createdAt: timestamp,
 			updatedAt: timestamp,
 		};
-		if ((await this.list()).some((item) => item.id === proposal.id)) {
-			throw new RefinementLedgerError(
-				`Refinement proposal already exists: ${proposal.id}`,
-			);
-		}
-		await this.append(proposal);
-		return proposal;
+		return this.withLock(async () => {
+			const events = await this.readEvents();
+			if (
+				this.snapshot(events).some((item) => item.id === proposal.id)
+			) {
+				throw new RefinementLedgerError(
+					`Refinement proposal already exists: ${proposal.id}`,
+				);
+			}
+			await this.append(proposal, events.length + 1);
+			return proposal;
+		});
 	}
 
 	async validate(id: string, evidence: string): Promise<RefinementProposal> {
 		if (evidence.trim().length === 0) {
 			throw new RefinementLedgerError("Validation evidence must not be empty");
 		}
-		const proposal = await this.requireProposal(id);
-		this.requireStatus(proposal, "proposed", "validate");
-		return this.update(proposal, {
-			status: "validated",
-			validationEvidence: [...proposal.validationEvidence, evidence.trim()],
+		return this.update(id, (proposal) => {
+			this.requireStatus(proposal, "proposed", "validate");
+			return {
+				...proposal,
+				status: "validated",
+				validationEvidence: [...proposal.validationEvidence, evidence.trim()],
+			};
 		});
 	}
 
@@ -109,90 +119,123 @@ export class RefinementLedger {
 		if (approvedBy.trim().length === 0) {
 			throw new RefinementLedgerError("Approver must not be empty");
 		}
-		const proposal = await this.requireProposal(id);
-		this.requireStatus(proposal, "validated", "approve");
-		return this.update(proposal, {
-			status: "approved",
-			approvedBy: approvedBy.trim(),
+		return this.update(id, (proposal) => {
+			this.requireStatus(proposal, "validated", "approve");
+			return {
+				...proposal,
+				status: "approved",
+				approvedBy: approvedBy.trim(),
+			};
 		});
 	}
 
 	async activate(id: string, currentHash: string): Promise<RefinementProposal> {
-		const proposal = await this.requireProposal(id);
-		this.requireStatus(proposal, "approved", "activate");
-		if (proposal.baseHash !== currentHash) {
-			throw new RefinementLedgerError(
-				`Refinement base hash ${proposal.baseHash} does not match current hash ${currentHash}`,
+		return this.update(id, (proposal, proposals) => {
+			this.requireStatus(proposal, "approved", "activate");
+			if (proposal.baseHash !== currentHash) {
+				throw new RefinementLedgerError(
+					`Refinement base hash ${proposal.baseHash} does not match current hash ${currentHash}`,
+				);
+			}
+			const conflict = proposals.find(
+				(item) =>
+					item.id !== id &&
+					item.artifactPath === proposal.artifactPath &&
+					item.status === "active",
 			);
-		}
-		const conflict = (await this.list()).find(
-			(item) =>
-				item.id !== id &&
-				item.artifactPath === proposal.artifactPath &&
-				item.status === "active",
-		);
-		if (conflict) {
-			throw new RefinementLedgerError(
-				`Artifact already has active proposal ${conflict.id}`,
-			);
-		}
-		return this.update(proposal, { status: "active" });
+			if (conflict) {
+				throw new RefinementLedgerError(
+					`Artifact already has active proposal ${conflict.id}`,
+				);
+			}
+			return { ...proposal, status: "active" };
+		});
 	}
 
 	async reject(id: string, reason: string): Promise<RefinementProposal> {
-		const proposal = await this.requireProposal(id);
-		if (
-			["active", "rolled_back", "rejected", "quarantined"].includes(
-				proposal.status,
-			)
-		) {
-			throw new RefinementLedgerError(
-				`Cannot reject refinement in ${proposal.status} status`,
-			);
-		}
-		return this.update(proposal, {
-			status: "rejected",
-			reason: this.requireReason(reason),
+		return this.update(id, (proposal) => {
+			if (
+				["active", "rolled_back", "rejected", "quarantined"].includes(
+					proposal.status,
+				)
+			) {
+				throw new RefinementLedgerError(
+					`Cannot reject refinement in ${proposal.status} status`,
+				);
+			}
+			return {
+				...proposal,
+				status: "rejected",
+				reason: this.requireReason(reason),
+			};
 		});
 	}
 
 	async rollback(id: string, reason: string): Promise<RefinementProposal> {
-		const proposal = await this.requireProposal(id);
-		this.requireStatus(proposal, "active", "roll back");
-		return this.update(proposal, {
-			status: "rolled_back",
-			reason: this.requireReason(reason),
+		return this.update(id, (proposal) => {
+			this.requireStatus(proposal, "active", "roll back");
+			return {
+				...proposal,
+				status: "rolled_back",
+				reason: this.requireReason(reason),
+			};
 		});
 	}
 
 	async quarantine(id: string, reason: string): Promise<RefinementProposal> {
-		const proposal = await this.requireProposal(id);
-		if (proposal.status === "rolled_back") {
-			throw new RefinementLedgerError(
-				"Cannot quarantine a rolled-back refinement",
-			);
-		}
-		return this.update(proposal, {
-			status: "quarantined",
-			reason: this.requireReason(reason),
+		return this.update(id, (proposal) => {
+			if (proposal.status === "rolled_back") {
+				throw new RefinementLedgerError(
+					"Cannot quarantine a rolled-back refinement",
+				);
+			}
+			return {
+				...proposal,
+				status: "quarantined",
+				reason: this.requireReason(reason),
+			};
 		});
 	}
 
 	private async update(
-		proposal: RefinementProposal,
-		changes: Partial<RefinementProposal>,
+		id: string,
+		change: (
+			proposal: RefinementProposal,
+			proposals: RefinementProposal[],
+		) => RefinementProposal,
 	): Promise<RefinementProposal> {
-		const next = { ...proposal, ...changes, updatedAt: this.now() };
-		await this.append(next);
-		return next;
+		return this.withLock(async () => {
+			const events = await this.readEvents();
+			const proposals = this.snapshot(events);
+			const proposal = proposals.find((item) => item.id === id);
+			if (!proposal) {
+				throw new RefinementLedgerError(`Unknown refinement proposal: ${id}`);
+			}
+			const next = {
+				...change(proposal, proposals),
+				updatedAt: this.now(),
+			};
+			await this.append(next, events.length + 1);
+			return next;
+		});
 	}
 
-	private async requireProposal(id: string): Promise<RefinementProposal> {
-		const proposal = (await this.list()).find((item) => item.id === id);
-		if (!proposal) {
-			throw new RefinementLedgerError(`Unknown refinement proposal: ${id}`);
+	private snapshot(events: RefinementLedgerEvent[]): RefinementProposal[] {
+		const proposals = new Map<string, RefinementProposal>();
+		for (const event of events) {
+			proposals.set(event.proposal.id, event.proposal);
 		}
-		return proposal;
+		return [...proposals.values()];
+	}
+
+	private async withLock<T>(operation: () => Promise<T>): Promise<T> {
+		await mkdir(dirname(this.ledgerPath), { recursive: true, mode: 0o700 });
+		const release = await acquireFileLock(this.lockPath);
+		try {
+			return await operation();
+		} finally {
+			await release();
+		}
 	}
 
 	private requireStatus(
@@ -214,11 +257,13 @@ export class RefinementLedger {
 		return reason.trim();
 	}
 
-	private async append(proposal: RefinementProposal): Promise<void> {
-		const events = await this.readEvents();
+	private async append(
+		proposal: RefinementProposal,
+		sequence: number,
+	): Promise<void> {
 		const eventWithoutChecksum = {
 			schemaVersion: 1 as const,
-			sequence: events.length + 1,
+			sequence,
 			at: proposal.updatedAt,
 			proposal,
 		};

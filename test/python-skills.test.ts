@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,6 +86,48 @@ describe("Python skill environment", () => {
 		expect(second.pythonPath).toBe(first.pythonPath);
 		expect(await Bun.file(first.pythonPath).exists()).toBe(true);
 	}, 20_000);
+
+	test("recovers an orphaned stale provisioning lock", async () => {
+		if (!pythonPath) throw new Error("python3 is required for this test");
+		const root = await createRoot();
+		const manifest = validManifest();
+		const environmentHash = createHash("sha256")
+			.update(
+				JSON.stringify({
+					python: manifest.python,
+					dependencies: [...manifest.dependencies].sort(),
+				}),
+			)
+			.digest("hex");
+		const lockPath = join(
+			root,
+			".pi",
+			"python-skills",
+			"venvs",
+			`${environmentHash}.lock`,
+		);
+		await mkdir(join(root, ".pi", "python-skills", "venvs"), {
+			recursive: true,
+		});
+		await writeFile(
+			lockPath,
+			JSON.stringify({
+				token: "dead-owner",
+				pid: 2_147_483_647,
+				acquiredAt: "2000-01-01T00:00:00.000Z",
+			}),
+		);
+		const environment = new PythonSkillEnvironment(root, {
+			pythonPath,
+			lockTimeoutMs: 2_000,
+			staleLockMs: 10,
+		});
+
+		const provisioned = await environment.provision(manifest);
+
+		expect(provisioned.reused).toBe(false);
+		expect(await Bun.file(provisioned.pythonPath).exists()).toBe(true);
+	}, 20_000);
 });
 
 describe("Python skill runner", () => {
@@ -97,7 +140,10 @@ describe("Python skill runner", () => {
 		);
 		const runner = new PythonSkillRunner(
 			{ provision: async () => ({ pythonPath, reused: true }) },
-			{ environment: { ALLOWED: "yes", SECRET: "hidden" } },
+			{
+				environment: { ALLOWED: "yes", SECRET: "hidden" },
+				allowedEnvironment: ["ALLOWED"],
+			},
 		);
 
 		const result = await runner.run(
@@ -112,6 +158,30 @@ describe("Python skill runner", () => {
 			secret: null,
 		});
 		expect(result.stderr).toBe("");
+	});
+
+	test("rejects manifest-requested environment without host authorization", async () => {
+		if (!pythonPath) throw new Error("python3 is required for this test");
+		const root = await createRoot();
+		await writeFile(
+			join(root, "main.py"),
+			'import json, sys\njson.dump(json.load(sys.stdin), sys.stdout)\n',
+		);
+		const runner = new PythonSkillRunner(
+			{ provision: async () => ({ pythonPath, reused: true }) },
+			{
+				environment: { SECRET: "hidden" },
+				allowedEnvironment: [],
+			},
+		);
+
+		await expect(
+			runner.run(
+				root,
+				validManifest({ environment: ["SECRET"] }),
+				{ message: "hello" },
+			),
+		).rejects.toThrow("not host-authorized");
 	});
 
 	test("rejects schema errors, oversized output, timeout, and unsupported network denial", async () => {
