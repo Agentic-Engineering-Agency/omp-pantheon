@@ -8,7 +8,7 @@ It is opt-in. Normal OMP sessions are unchanged until `/autonomy start` is used.
 
 - Install this bundle so `extensions/oh-my-omp/index.ts` is discovered by OMP.
 - Use `@oh-my-pi/pi-coding-agent` 17.2.14 or a compatible 17.x release.
-- Start OMP in the target project. Objective and worker state are written to a private per-user state directory. Refinement history and Python caches remain beneath that project's `.pi/` directory.
+- Start OMP in the target project. Objective, worker, Python environment, and SpecSafe receipt state are written to private per-user storage; refinement history remains beneath that project's `.pi/` directory.
 
 No global daemon is installed. Starting an autonomy run asks OMP's launch broker to run a run-scoped `pantheon-agentd-<hash>` with `restart: on-failure` and `persist: true`. An active run survives parent-session shutdown so queued work can resume. Terminal success, terminal failure, and cancellation stop that run's worker.
 
