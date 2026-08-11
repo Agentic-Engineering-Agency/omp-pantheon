@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { acquireFileLock } from "../file-lock";
+import { appendPrivateFile, ensurePrivateDirectory } from "../private-files";
 
 const JOURNAL_FILE = "commands.jsonl";
 const LOCK_FILE = "commands.lock";
@@ -503,15 +504,13 @@ export class CommandJournal {
 	async #append(
 		event: Omit<CommandJournalEvent, "schemaVersion" | "checksum">,
 	): Promise<void> {
-		await mkdir(dirname(this.path), { recursive: true });
 		const withoutChecksum = { schemaVersion: 1 as const, ...event };
 		const checksum = createHash("sha256")
 			.update(JSON.stringify(withoutChecksum))
 			.digest("hex");
-		await appendFile(
+		await appendPrivateFile(
 			this.path,
 			`${JSON.stringify({ ...withoutChecksum, checksum })}\n`,
-			"utf8",
 		);
 	}
 
@@ -585,7 +584,7 @@ export class CommandJournal {
 	}
 
 	async #acquireLock(): Promise<() => Promise<void>> {
-		await mkdir(dirname(this.#lockPath), { recursive: true, mode: 0o700 });
+		await ensurePrivateDirectory(dirname(this.#lockPath));
 		return acquireFileLock(this.#lockPath);
 	}
 }

@@ -1,14 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-	appendFile,
-	mkdir,
-	readFile,
-	rename,
-	rm,
-	writeFile,
-} from "node:fs/promises";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { acquireFileLock } from "../file-lock";
+import { appendPrivateFile, ensurePrivateDirectory } from "../private-files";
 
 import type { CommandJournal, WorkerCommand } from "./journal";
 
@@ -300,7 +294,7 @@ export class PersistedScheduler {
 			const nextGeneration = state.manifest.activeGeneration + 1;
 			const finalDirectory = this.#generationPath(nextGeneration);
 			const temporaryDirectory = `${finalDirectory}.tmp-${randomUUID()}`;
-			await mkdir(temporaryDirectory, { recursive: true });
+			await ensurePrivateDirectory(temporaryDirectory);
 			const snapshot = withChecksum({
 				schemaVersion: 1 as const,
 				sequence: state.sequence,
@@ -310,10 +304,11 @@ export class PersistedScheduler {
 				await writeFile(
 					join(temporaryDirectory, SNAPSHOT_FILE),
 					`${JSON.stringify(snapshot)}\n`,
-					{ flag: "wx" },
+					{ flag: "wx", mode: 0o600 },
 				);
 				await writeFile(join(temporaryDirectory, EVENTS_FILE), "", {
 					flag: "wx",
+					mode: 0o600,
 				});
 				await this.#readSnapshot(join(temporaryDirectory, SNAPSHOT_FILE));
 				await rename(temporaryDirectory, finalDirectory);
@@ -386,7 +381,7 @@ export class PersistedScheduler {
 			at: this.#isoNow(),
 			...fields,
 		});
-		await appendFile(
+		await appendPrivateFile(
 			join(this.#generationPath(state.manifest.activeGeneration), EVENTS_FILE),
 			`${JSON.stringify(event)}\n`,
 		);
@@ -547,10 +542,12 @@ export class PersistedScheduler {
 	}
 
 	async #ensureStorage(): Promise<void> {
+		await ensurePrivateDirectory(this.#directory);
+		await ensurePrivateDirectory(this.#generationsPath);
 		const existingManifest = await this.#readOptional(this.#manifestPath);
 		if (existingManifest !== null) return;
 		const generationPath = this.#generationPath(1);
-		await mkdir(generationPath, { recursive: true });
+		await ensurePrivateDirectory(generationPath);
 		const snapshot = withChecksum({
 			schemaVersion: 1 as const,
 			sequence: 0,
@@ -559,9 +556,12 @@ export class PersistedScheduler {
 		await writeFile(
 			join(generationPath, SNAPSHOT_FILE),
 			`${JSON.stringify(snapshot)}\n`,
-			{ flag: "wx" },
+			{ flag: "wx", mode: 0o600 },
 		);
-		await writeFile(join(generationPath, EVENTS_FILE), "", { flag: "wx" });
+		await writeFile(join(generationPath, EVENTS_FILE), "", {
+			flag: "wx",
+			mode: 0o600,
+		});
 		await this.#readSnapshot(join(generationPath, SNAPSHOT_FILE));
 		await this.#writeAtomic(this.#manifestPath, {
 			schemaVersion: 1,
@@ -663,9 +663,12 @@ export class PersistedScheduler {
 	}
 
 	async #writeAtomic(path: string, value: unknown): Promise<void> {
-		await mkdir(dirname(path), { recursive: true });
+		await ensurePrivateDirectory(dirname(path));
 		const temporary = `${path}.tmp-${randomUUID()}`;
-		await writeFile(temporary, `${JSON.stringify(value)}\n`, { flag: "wx" });
+		await writeFile(temporary, `${JSON.stringify(value)}\n`, {
+			flag: "wx",
+			mode: 0o600,
+		});
 		await rename(temporary, path);
 	}
 
@@ -687,7 +690,7 @@ export class PersistedScheduler {
 	}
 
 	async #acquireLock(): Promise<() => Promise<void>> {
-		await mkdir(this.#directory, { recursive: true });
+		await ensurePrivateDirectory(this.#directory);
 		return acquireFileLock(this.#lockPath, {
 			timeoutMs: this.#lockTimeoutMs,
 			staleMs: this.#lockStaleMs,

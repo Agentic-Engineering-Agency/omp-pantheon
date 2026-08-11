@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, normalize, sep } from "node:path";
+import { readFile } from "node:fs/promises";
+import { isAbsolute, join, normalize, sep } from "node:path";
 import { acquireFileLock } from "../file-lock";
+import {
+	appendPrivateFile,
+	assertNoSymlinkComponents,
+	ensurePrivateDirectory,
+} from "../private-files";
 
 import type {
 	CreateRefinementProposal,
@@ -32,7 +37,10 @@ export class RefinementLedger {
 	private readonly now: () => string;
 	private readonly createId: () => string;
 
-	constructor(root: string, options: RefinementLedgerOptions = {}) {
+	constructor(
+		private readonly root: string,
+		options: RefinementLedgerOptions = {},
+	) {
 		this.ledgerPath = join(root, LEDGER_PATH);
 		this.lockPath = `${this.ledgerPath}.lock`;
 		this.quarantinePath = join(root, QUARANTINE_PATH);
@@ -227,7 +235,8 @@ export class RefinementLedger {
 	}
 
 	private async withLock<T>(operation: () => Promise<T>): Promise<T> {
-		await mkdir(dirname(this.ledgerPath), { recursive: true, mode: 0o700 });
+		await assertNoSymlinkComponents(this.root, this.ledgerPath);
+		await ensurePrivateDirectory(join(this.root, ".pi", "refinement"));
 		const release = await acquireFileLock(this.lockPath);
 		try {
 			return await operation();
@@ -268,15 +277,15 @@ export class RefinementLedger {
 		const checksum = createHash("sha256")
 			.update(JSON.stringify(eventWithoutChecksum))
 			.digest("hex");
-		await mkdir(dirname(this.ledgerPath), { recursive: true });
-		await appendFile(
+		await assertNoSymlinkComponents(this.root, this.ledgerPath);
+		await appendPrivateFile(
 			this.ledgerPath,
 			`${JSON.stringify({ ...eventWithoutChecksum, checksum })}\n`,
-			"utf8",
 		);
 	}
 
 	private async readEvents(): Promise<RefinementLedgerEvent[]> {
+		await assertNoSymlinkComponents(this.root, this.ledgerPath);
 		let raw: string;
 		try {
 			raw = await readFile(this.ledgerPath, "utf8");
@@ -319,8 +328,8 @@ export class RefinementLedger {
 		raw: string,
 		error: unknown,
 	): Promise<void> {
-		await mkdir(dirname(this.quarantinePath), { recursive: true });
-		await appendFile(
+		await assertNoSymlinkComponents(this.root, this.quarantinePath);
+		await appendPrivateFile(
 			this.quarantinePath,
 			`${JSON.stringify({
 				at: this.now(),
@@ -328,7 +337,6 @@ export class RefinementLedger {
 				raw,
 				reason: error instanceof Error ? error.message : String(error),
 			})}\n`,
-			"utf8",
 		);
 	}
 }

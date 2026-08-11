@@ -11,9 +11,10 @@ the Seshat/SpecSafe runtime into the local harness.
 - Advertises `~/.omp/agent/skills/` via `resources_discover`.
 - Owns the opt-in **verified autonomy runtime**: exact native OMP goal
   ownership, a fixed host-run verification command, bounded attempts,
-  checksummed/CAS project state, and a run-scoped broker worker.
-- Stores executable worker commands and schedules outside the repository in a
-  private per-user state directory; leases heartbeat and terminal
+  checksummed/CAS private state, and a run-scoped broker worker.
+- Stores objective state, executable worker commands, and schedules outside
+  the repository in a private per-user state directory; incomplete attempts
+  enqueue durable continuations, leases heartbeat, and terminal
   `failed`/`uncertain` outcomes are not replayed indefinitely.
 - Registers `/autonomy` and the parameterless `autonomy_gate` verification
   tool. See [`docs/autonomy.md`](../../docs/autonomy.md) for lifecycle, state,

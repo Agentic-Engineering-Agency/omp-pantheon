@@ -1,14 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-	appendFile,
-	mkdir,
-	readFile,
-	rename,
-	writeFile,
-} from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { acquireFileLock } from "../file-lock";
+import {
+	appendPrivateFile,
+	assertNoSymlinkComponents,
+	ensurePrivateDirectory,
+} from "../private-files";
 
 import type { AutonomyJournalEvent, AutonomyRun } from "./types";
 
@@ -23,18 +22,28 @@ export class AutonomyStoreError extends Error {
 	}
 }
 
+interface AutonomyStoreOptions {
+	stateDirectory?: string;
+}
+
 export class AutonomyStore {
 	readonly statePath: string;
 	readonly journalPath: string;
 	readonly lockPath: string;
+	private readonly projectRoot: string;
+	private readonly projectState: boolean;
 
-	constructor(private readonly root: string) {
-		this.statePath = join(root, STATE_DIRECTORY, STATE_FILE);
-		this.journalPath = join(root, STATE_DIRECTORY, JOURNAL_FILE);
+	constructor(root: string, options: AutonomyStoreOptions = {}) {
+		this.projectRoot = root;
+		this.projectState = options.stateDirectory === undefined;
+		const directory = options.stateDirectory ?? join(root, STATE_DIRECTORY);
+		this.statePath = join(directory, STATE_FILE);
+		this.journalPath = join(directory, JOURNAL_FILE);
 		this.lockPath = `${this.statePath}.lock`;
 	}
 
 	async load(): Promise<AutonomyRun | null> {
+		await this.assertSafeStatePath();
 		const [snapshot, journal] = await Promise.all([
 			this.readOptional(this.statePath),
 			this.readOptional(this.journalPath),
@@ -63,6 +72,7 @@ export class AutonomyStore {
 	}
 
 	async save(state: AutonomyRun, expectedRevision: number): Promise<void> {
+		await this.assertSafeStatePath();
 		this.assertState(state, "state");
 		if (
 			!Number.isInteger(expectedRevision) ||
@@ -74,7 +84,7 @@ export class AutonomyStore {
 			);
 		}
 		const directory = dirname(this.statePath);
-		await mkdir(directory, { recursive: true, mode: 0o700 });
+		await ensurePrivateDirectory(directory);
 		const release = await acquireFileLock(this.lockPath);
 		try {
 			const current = await this.load();
@@ -98,18 +108,23 @@ export class AutonomyStore {
 				...eventWithoutChecksum,
 				checksum,
 			};
-			await appendFile(this.journalPath, `${JSON.stringify(event)}\n`, "utf8");
+			await appendPrivateFile(this.journalPath, `${JSON.stringify(event)}\n`);
 
 			const temporaryPath = `${this.statePath}.${randomUUID()}.tmp`;
-			await writeFile(
-				temporaryPath,
-				`${JSON.stringify(state, null, 2)}\n`,
-				"utf8",
-			);
+			await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, {
+				encoding: "utf8",
+				flag: "wx",
+				mode: 0o600,
+			});
 			await rename(temporaryPath, this.statePath);
 		} finally {
 			await release();
 		}
+	}
+
+	private async assertSafeStatePath(): Promise<void> {
+		if (!this.projectState) return;
+		await assertNoSymlinkComponents(this.projectRoot, dirname(this.statePath));
 	}
 
 	private async readOptional(path: string): Promise<string | null> {

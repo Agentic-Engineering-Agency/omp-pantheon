@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -166,5 +173,17 @@ describe("RefinementLedger", () => {
 			"utf8",
 		);
 		expect(quarantine).toContain("{bad json}");
+	});
+	test("refuses a symlinked project refinement state directory", async () => {
+		const { ledger, root } = await createLedger();
+		const outside = await mkdtemp(
+			join(tmpdir(), "pantheon-refinement-outside-"),
+		);
+		roots.push(outside);
+		await mkdir(join(root, ".pi"));
+		await symlink(outside, join(root, ".pi", "refinement"), "dir");
+
+		await expect(propose(ledger)).rejects.toThrow("symbolic link");
+		expect(await Bun.file(join(outside, "ledger.jsonl")).exists()).toBe(false);
 	});
 });

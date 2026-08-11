@@ -1,10 +1,17 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { CommandJournal } from "../extensions/oh-my-omp/autonomy/journal";
 import { registerAutonomy } from "../extensions/oh-my-omp/autonomy/runtime";
+import {
+	autonomyProjectStateRoot,
+	autonomyRuntimeRoot,
+} from "../extensions/oh-my-omp/autonomy/runtime-paths";
+import { PersistedScheduler } from "../extensions/oh-my-omp/autonomy/scheduler";
+import { AutonomyStore } from "../extensions/oh-my-omp/autonomy/store";
 import registerPantheon from "../extensions/oh-my-omp/index";
 
 interface RegisteredCommand {
@@ -24,12 +31,15 @@ interface RegisteredTool {
 
 interface FakeContext {
 	cwd: string;
+	sessionManager?: {
+		getSessionFile: () => string;
+	};
 	ui: {
 		notify: (message: string, level: string) => void;
 	};
 }
 
-type EventHandler = (event: never, ctx: FakeContext) => Promise<void> | void;
+type EventHandler = (event: unknown, ctx: FakeContext) => Promise<void> | void;
 
 const roots: string[] = [];
 const registerTestAutonomy = (pi: never): unknown =>
@@ -42,11 +52,19 @@ const registerTestAutonomy = (pi: never): unknown =>
 		},
 	});
 
+interface FakeExtensionOptions {
+	cwd?: string;
+	sessionFile?: string;
+}
+
 async function createFakeExtension(
 	register: (pi: never) => unknown | Promise<unknown> = registerTestAutonomy,
+	options: FakeExtensionOptions = {},
 ) {
-	const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-extension-"));
-	roots.push(cwd);
+	const cwd =
+		options.cwd ??
+		(await mkdtemp(join(tmpdir(), "pantheon-autonomy-extension-")));
+	if (options.cwd === undefined) roots.push(cwd);
 	const handlers: Record<string, EventHandler[]> = {};
 	const commands: Record<string, RegisteredCommand> = {};
 	const tools: Record<string, RegisteredTool> = {};
@@ -89,6 +107,10 @@ async function createFakeExtension(
 	await register(pi as never);
 	const ctx: FakeContext = {
 		cwd,
+		sessionManager:
+			options.sessionFile === undefined
+				? undefined
+				: { getSessionFile: () => options.sessionFile as string },
 		ui: {
 			notify(message, level) {
 				notifications.push(`${level}:${message}`);
@@ -233,5 +255,207 @@ describe("autonomy extension", () => {
 		expect(messages.at(-1)).toContain("native-goal, verification");
 		expect(notifications.at(-1)).toContain("attempt 2/2");
 		expect(notifications.at(-1)).not.toContain("succeeded");
+	});
+
+	test("queues a persistent continuation and resumes its daemon in a new session", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-project-"));
+		const stateHome = await mkdtemp(join(tmpdir(), "pantheon-autonomy-state-"));
+		roots.push(cwd, stateHome);
+		const sessionFile = join(cwd, "session.jsonl");
+		const firstStarts: string[] = [];
+		const firstStops: string[] = [];
+		const first = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						now: () => "2026-08-11T22:30:00.000Z",
+						agentdFactory: () => ({
+							async start(runId) {
+								firstStarts.push(runId);
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop(runId) {
+								firstStops.push(runId);
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile },
+		);
+
+		await first.commands.autonomy?.handler(
+			'start "Ship persistently" --max-attempts=3',
+			first.ctx,
+		);
+		await first.handlers.agent_end?.[0]?.({ messages: [] }, first.ctx);
+		await first.handlers.session_shutdown?.[0]?.({}, first.ctx);
+
+		const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+		const state = await new AutonomyStore(cwd, { stateDirectory }).load();
+		if (state === null) throw new Error("Expected persisted autonomy state");
+		expect(state?.status).toBe("running");
+		expect(state?.attempt).toBe(2);
+		expect(firstStarts).toEqual([state.id]);
+		expect(firstStops).toEqual([]);
+
+		const runtimeRoot = autonomyRuntimeRoot(cwd, state.id, stateHome);
+		const journal = new CommandJournal(runtimeRoot, {
+			expectedRunId: state.id,
+			expectedCwd: cwd,
+		});
+		const schedules = await new PersistedScheduler(runtimeRoot, journal).list();
+		expect(schedules).toHaveLength(1);
+		expect(schedules[0]?.request.command).toMatchObject({
+			runId: state.id,
+			cwd,
+			sessionFile,
+			maxAttempts: 3,
+		});
+
+		const secondStarts: string[] = [];
+		await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start(runId) {
+								secondStarts.push(runId);
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile },
+		);
+		expect(secondStarts).toEqual([state.id]);
+	});
+
+	test("invalidates completed gates after a successful mutating tool result", async () => {
+		const { commands, ctx, handlers, logs, messages, tools } =
+			await createFakeExtension();
+		await commands.autonomy?.handler('start "Ship" --max-attempts=2', ctx);
+		await handlers.goal_updated?.[0]?.(
+			{ goal: { id: "goal-1", objective: "Ship", status: "complete" } },
+			ctx,
+		);
+		await tools.autonomy_gate?.execute(
+			"verification-1",
+			{},
+			undefined,
+			undefined,
+			ctx,
+		);
+
+		await handlers.tool_result?.[0]?.(
+			{
+				toolCallId: "write-1",
+				toolName: "write",
+				input: { path: "src/result.ts" },
+				isError: false,
+			},
+			ctx,
+		);
+		await handlers.agent_end?.[0]?.({ messages: [] }, ctx);
+
+		expect(logs).not.toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+		expect(messages.at(-1)).toContain("native-goal, verification");
+	});
+
+	test("creates persistent autonomy state with private modes", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-project-"));
+		const stateHome = await mkdtemp(join(tmpdir(), "pantheon-autonomy-state-"));
+		roots.push(cwd, stateHome);
+		const sessionFile = join(cwd, "session.jsonl");
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Private state" --max-attempts=2',
+			extension.ctx,
+		);
+		await extension.handlers.agent_end?.[0]?.({ messages: [] }, extension.ctx);
+
+		const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+		const state = await new AutonomyStore(cwd, { stateDirectory }).load();
+		const runtimeRoot = autonomyRuntimeRoot(cwd, state?.id ?? "", stateHome);
+		for (const directory of [
+			stateDirectory,
+			runtimeRoot,
+			join(runtimeRoot, "scheduler"),
+			join(runtimeRoot, "scheduler", "generations"),
+			join(runtimeRoot, "scheduler", "generations", "1"),
+		]) {
+			expect((await stat(directory)).mode & 0o777).toBe(0o700);
+		}
+		for (const file of [
+			join(stateDirectory, "state.json"),
+			join(stateDirectory, "events.jsonl"),
+			join(runtimeRoot, "scheduler", "manifest.json"),
+			join(runtimeRoot, "scheduler", "generations", "1", "snapshot.json"),
+			join(runtimeRoot, "scheduler", "generations", "1", "events.jsonl"),
+		]) {
+			expect((await stat(file)).mode & 0o777).toBe(0o600);
+		}
 	});
 });

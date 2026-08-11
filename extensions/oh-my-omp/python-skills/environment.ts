@@ -1,8 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { acquireFileLock } from "../file-lock";
+import {
+	assertNoSymlinkComponents,
+	ensurePrivateDirectory,
+} from "../private-files";
 
 import type { PythonSkillManifest } from "./manifest";
 
@@ -39,7 +43,7 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 	private readonly provisioningTimeoutMs: number;
 
 	constructor(
-		projectRoot: string,
+		private readonly projectRoot: string,
 		options: PythonSkillEnvironmentOptions = {},
 	) {
 		this.root = join(projectRoot, ".pi", "python-skills", "venvs");
@@ -52,6 +56,7 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 	async provision(
 		manifest: PythonSkillManifest,
 	): Promise<ProvisionedPythonEnvironment> {
+		await assertNoSymlinkComponents(this.projectRoot, this.root);
 		const environmentHash = createHash("sha256")
 			.update(
 				JSON.stringify({
@@ -69,7 +74,7 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 			return { pythonPath: environmentPython, reused: true };
 		}
 
-		await mkdir(this.root, { recursive: true });
+		await ensurePrivateDirectory(this.root);
 		const lockPath = `${environmentPath}.lock`;
 		let release: () => Promise<void>;
 		try {

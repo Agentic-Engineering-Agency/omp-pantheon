@@ -1,12 +1,22 @@
+import { createHash } from "node:crypto";
+import { resolve } from "node:path";
+
 import type {
 	AgentEndEvent,
 	ExtensionAPI,
 	ExtensionContext,
+	ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
 
 import { type AgentdStatus, AutonomyAgentd } from "./agentd";
 import { registerAutonomyCommands } from "./commands";
 import { AutonomyController, AutonomyTransitionError } from "./controller";
+import { CommandJournal } from "./journal";
+import {
+	prepareAutonomyProjectStateRoot,
+	prepareAutonomyRuntimeRoot,
+} from "./runtime-paths";
+import { PersistedScheduler } from "./scheduler";
 import { AutonomyStore } from "./store";
 import type { AutonomyRun } from "./types";
 
@@ -58,25 +68,65 @@ const defaultVerificationRunner: VerificationRunner = {
 	},
 };
 
+interface AgentdClient {
+	start(runId: string): Promise<AgentdStatus>;
+	status(runId: string): Promise<AgentdStatus>;
+	stop(runId: string): Promise<AgentdStatus>;
+	close(): void;
+}
+
+export interface AutonomyRuntimeOptions {
+	stateHome?: string | ((cwd: string) => string);
+	agentdFactory?: (cwd: string, stateHome?: string) => AgentdClient;
+	now?: () => string;
+}
+
 export class AutonomyRuntime {
 	private controller: AutonomyController | null = null;
-	private agentd: AutonomyAgentd | null = null;
+	private agentd: AgentdClient | null = null;
 	private cwd: string | null = null;
+	private sessionFile: string | null = null;
+	private stateHome: string | undefined;
 
 	constructor(
 		private readonly pi: ExtensionAPI,
 		private readonly verifier: VerificationRunner = defaultVerificationRunner,
+		private readonly options: AutonomyRuntimeOptions = {},
 	) {}
 
 	async attach(
 		ctx: Pick<ExtensionContext, "cwd"> &
 			Partial<Pick<ExtensionContext, "sessionManager">>,
 	): Promise<void> {
-		if (this.cwd === ctx.cwd && this.controller !== null) return;
+		const resolvedCwd = resolve(ctx.cwd);
+		const sessionFile = ctx.sessionManager?.getSessionFile() ?? null;
+		if (this.cwd === resolvedCwd && this.controller !== null) {
+			this.sessionFile = sessionFile === null ? null : resolve(sessionFile);
+			return;
+		}
 		this.agentd?.close();
-		this.cwd = ctx.cwd;
-		this.controller = new AutonomyController(new AutonomyStore(ctx.cwd));
-		this.agentd = "sessionManager" in ctx ? new AutonomyAgentd(ctx.cwd) : null;
+		this.cwd = resolvedCwd;
+		this.sessionFile = sessionFile === null ? null : resolve(sessionFile);
+		this.stateHome =
+			typeof this.options.stateHome === "function"
+				? this.options.stateHome(this.cwd)
+				: this.options.stateHome;
+		const stateDirectory =
+			ctx.sessionManager === undefined && this.stateHome === undefined
+				? undefined
+				: await prepareAutonomyProjectStateRoot(this.cwd, this.stateHome);
+		this.controller = new AutonomyController(
+			new AutonomyStore(this.cwd, { stateDirectory }),
+		);
+		this.agentd =
+			ctx.sessionManager === undefined
+				? null
+				: (this.options.agentdFactory?.(this.cwd, this.stateHome) ??
+					new AutonomyAgentd(this.cwd, { stateHome: this.stateHome }));
+		const state = await this.controller.get();
+		if (state !== null && ACTIVE_STATUSES[state.status] === true) {
+			await this.agentd?.start(state.id);
+		}
 	}
 
 	async start(
@@ -116,7 +166,15 @@ export class AutonomyRuntime {
 	}
 
 	async resume(): Promise<AutonomyRun> {
-		return (await this.requireController()).resume();
+		const state = await (await this.requireController()).resume();
+		await this.agentd?.start(state.id);
+		await this.scheduleContinuation(
+			state,
+			state.gates
+				.filter((gate) => gate.status !== "pass")
+				.map((gate) => gate.id),
+		);
+		return state;
 	}
 
 	async cancel(): Promise<AutonomyRun> {
@@ -185,6 +243,30 @@ export class AutonomyRuntime {
 		});
 	}
 
+	async onToolResult(event: ToolResultEvent): Promise<void> {
+		if (
+			event.isError ||
+			["read", "grep", "glob", "autonomy_gate"].includes(event.toolName)
+		) {
+			return;
+		}
+		const controller = await this.requireController();
+		const state = await controller.get();
+		if (state === null || ACTIVE_STATUSES[state.status] !== true) return;
+		const evidence = createHash("sha256")
+			.update(
+				JSON.stringify({
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					input: event.input,
+				}),
+			)
+			.digest("hex");
+		await controller.recordArtifactRevision(
+			`tool:${event.toolName}:${evidence}`,
+		);
+	}
+
 	async onAgentEnd(_event: AgentEndEvent): Promise<void> {
 		const controller = await this.requireController();
 		const state = await controller.get();
@@ -204,21 +286,73 @@ export class AutonomyRuntime {
 			await this.stopAgentd(state.id);
 			return;
 		}
-		this.pi.sendUserMessage(
-			[
-				"<system-reminder>",
-				`Verified autonomy continues. Missing gates: ${decision.pendingGateIds.join(", ")}.`,
-				"Produce current objective evidence; completion promises and prose do not satisfy gates.",
-				"</system-reminder>",
-			].join("\n"),
-			{ deliverAs: "followUp" },
-		);
+		const next = await controller.get();
+		if (next === null) {
+			throw new Error("Autonomy state disappeared before continuation");
+		}
+		await this.scheduleContinuation(next, continuation.pendingGateIds);
 	}
 
 	async close(): Promise<void> {
-		await this.stopAgentd();
+		const state = await this.controller?.get();
+		if (
+			state !== null &&
+			state !== undefined &&
+			ACTIVE_STATUSES[state.status] !== true
+		) {
+			await this.stopAgentd(state.id);
+		}
 		this.agentd?.close();
 		this.agentd = null;
+	}
+
+	private async scheduleContinuation(
+		state: AutonomyRun,
+		pendingGateIds: string[],
+	): Promise<void> {
+		if (this.cwd === null || this.sessionFile === null) {
+			this.pi.sendUserMessage(this.continuationPrompt(pendingGateIds), {
+				deliverAs: "followUp",
+			});
+			return;
+		}
+		const root = await prepareAutonomyRuntimeRoot(
+			this.cwd,
+			state.id,
+			this.stateHome,
+		);
+		const journal = new CommandJournal(root, {
+			expectedRunId: state.id,
+			expectedCwd: this.cwd,
+		});
+		const scheduler = new PersistedScheduler(root, journal);
+		const suffix = `attempt-${state.attempt}-artifact-${state.artifactRevision}`;
+		const now = this.options.now?.() ?? new Date().toISOString();
+		await scheduler.schedule({
+			schemaVersion: 1,
+			id: `continuation-${suffix}`,
+			coalesceKey: `${state.id}:${suffix}`,
+			deadline: now,
+			command: {
+				schemaVersion: 1,
+				id: `command-${suffix}`,
+				runId: state.id,
+				cwd: this.cwd,
+				sessionFile: this.sessionFile,
+				prompt: this.continuationPrompt(pendingGateIds),
+				maxAttempts: 3,
+				createdAt: now,
+			},
+		});
+	}
+
+	private continuationPrompt(pendingGateIds: string[]): string {
+		return [
+			"<system-reminder>",
+			`Verified autonomy continues. Missing gates: ${pendingGateIds.join(", ")}.`,
+			"Produce current objective evidence; completion promises and prose do not satisfy gates.",
+			"</system-reminder>",
+		].join("\n");
 	}
 
 	private async stopAgentd(runId?: string): Promise<void> {
@@ -246,13 +380,15 @@ export class AutonomyRuntime {
 export function registerAutonomy(
 	pi: ExtensionAPI,
 	verifier: VerificationRunner = defaultVerificationRunner,
+	options: AutonomyRuntimeOptions = {},
 ): AutonomyRuntime {
-	const runtime = new AutonomyRuntime(pi, verifier);
+	const runtime = new AutonomyRuntime(pi, verifier, options);
 	pi.on("session_start", (_event, ctx) => runtime.attach(ctx));
 	pi.on("session_switch", (_event, ctx) => runtime.attach(ctx));
 	pi.on("session_branch", (_event, ctx) => runtime.attach(ctx));
 	pi.on("goal_updated", (event) => runtime.onGoalUpdated(event));
 	pi.on("agent_end", (event) => runtime.onAgentEnd(event));
+	pi.on("tool_result", (event) => runtime.onToolResult(event));
 	pi.on("session_shutdown", () => runtime.close());
 	registerAutonomyCommands(pi, runtime);
 

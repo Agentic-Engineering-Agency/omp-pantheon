@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -276,5 +283,16 @@ describe("AutonomyStore", () => {
 			results.filter((result) => result.status === "rejected"),
 		).toHaveLength(1);
 		expect((await store.load())?.revision).toBe(2);
+	});
+	test("refuses a symlinked project autonomy state directory", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pantheon-autonomy-symlink-"));
+		const outside = await mkdtemp(join(tmpdir(), "pantheon-autonomy-outside-"));
+		roots.push(root, outside);
+		await mkdir(join(root, ".pi"));
+		await symlink(outside, join(root, ".pi", "autonomy"), "dir");
+		const store = new AutonomyStore(root);
+
+		await expect(store.load()).rejects.toThrow("symbolic link");
+		expect(await Bun.file(join(outside, "state.json")).exists()).toBe(false);
 	});
 });

@@ -1,6 +1,6 @@
 # Verified autonomy
 
-Pantheon autonomy is an explicit, project-local execution mode built on OMP's public SDK. It persists objective state, resumes queued OMP sessions through a broker-managed worker, and accepts completion only from current objective evidence.
+Pantheon autonomy is an explicit, project-scoped execution mode built on OMP's public SDK. It persists objective state in private per-user storage, resumes queued OMP sessions through a broker-managed worker, and accepts completion only from current objective evidence.
 
 It is opt-in. Normal OMP sessions are unchanged until `/autonomy start` is used.
 
@@ -8,9 +8,9 @@ It is opt-in. Normal OMP sessions are unchanged until `/autonomy start` is used.
 
 - Install this bundle so `extensions/oh-my-omp/index.ts` is discovered by OMP.
 - Use `@oh-my-pi/pi-coding-agent` 17.2.14 or a compatible 17.x release.
-- Start OMP in the target project. Objective/refinement state and Python caches are written beneath that project's `.pi/` directory. Executable worker commands and schedules live in a private per-user state directory, outside the repository.
+- Start OMP in the target project. Objective and worker state are written to a private per-user state directory. Refinement history and Python caches remain beneath that project's `.pi/` directory.
 
-No global daemon is installed. Starting an autonomy run asks OMP's launch broker to run a run-scoped `pantheon-agentd-<hash>` with `restart: on-failure` and `persist: true`. Terminal success, terminal failure, cancellation, and session shutdown stop that run's worker.
+No global daemon is installed. Starting an autonomy run asks OMP's launch broker to run a run-scoped `pantheon-agentd-<hash>` with `restart: on-failure` and `persist: true`. An active run survives parent-session shutdown so queued work can resume. Terminal success, terminal failure, and cancellation stop that run's worker.
 
 ## Commands
 
@@ -32,7 +32,7 @@ The default run has two gates:
 1. `native-goal`: Pantheon first binds the ID of an `active` native OMP goal whose objective exactly matches the autonomy task. It records a pass only when OMP later emits `complete` for that same ID. Unrelated goals are ignored.
 2. `verification`: `autonomy_gate` accepts no evidence parameters. It asks the host runner to execute the command frozen by `/autonomy start --verify=...` and records the observed exit status.
 
-Every required gate must pass for the same attempt and artifact revision. Gate reporters are fixed by type (`native-goal-event` or `host-verifier`); model-supplied evidence cannot substitute for either. An artifact change invalidates old evidence. A failed or missing gate causes another bounded attempt; exhausting `maxAttempts` records a terminal failure with evidence.
+Every required gate must pass for the same attempt and artifact revision. Gate reporters are fixed by type (`native-goal-event` or `host-verifier`); model-supplied evidence cannot substitute for either. Every successful tool result except the known read-only tools (`read`, `grep`, and `glob`) and `autonomy_gate` advances the artifact revision and resets all gates. This conservative rule also treats unknown tools as mutating, so verification must run after the last mutation. A failed or missing gate causes another bounded attempt; exhausting `maxAttempts` records a terminal failure with evidence.
 
 Model prose is never completion evidence. `<promise>DONE</promise>`, similar markers, and an `agent_end` event cannot complete a run by themselves.
 
@@ -44,9 +44,9 @@ Model prose is never completion evidence. `<promise>DONE</promise>`, similar mar
 - `createAgentSession(...)` creates the headless session;
 - the worker waits for idle, flushes the session manager, then records a persistence receipt before acknowledging work.
 
-Commands are journaled before execution. Each command is bound to one autonomy run, one canonical project root, one absolute session file, and a finite attempt bound. Claims have leases, periodic heartbeats, and monotonically increasing fencing tokens. An interrupted execution is retried only up to its command bound. If execution completes but durable acknowledgement fails, the command becomes terminal `uncertain` instead of being replayed.
+Commands are journaled before execution. Each command is bound to one autonomy run, one canonical project root, one absolute session file, and a finite attempt bound. When an attempt ends without current gate evidence, the extension durably schedules a continuation before returning; `pantheon-agentd` claims it and reopens that exact session. Claims have leases, periodic heartbeats, and monotonically increasing fencing tokens. An interrupted execution is retried only up to its command bound. If execution completes but durable acknowledgement fails, the command becomes terminal `uncertain` instead of being replayed.
 
-The command journal and scheduler are not repository command channels. They live under `${XDG_STATE_HOME:-~/.local/state}/omp-pantheon/autonomy/<project-hash>/<run-id>/`, whose path is derived by the extension and checked again by `pantheon-agentd`. The daemon removes unrelated inherited environment variables before opening OMP sessions.
+Objective state, the command journal, and the scheduler are not repository command channels. They live under `${XDG_STATE_HOME:-~/.local/state}/omp-pantheon/autonomy/<project-hash>/`. The extension creates directories with mode `0700` and files with mode `0600`. Paths are derived by the extension and checked again by `pantheon-agentd`; the daemon removes unrelated inherited environment variables before opening OMP sessions.
 
 The scheduler stores absolute deadlines, claims due work before delivery, coalesces equivalent wakeups without merging distinct commands, and persists retry count, next deadline, last error, owner, and fencing token. Retry delay uses deterministic jitter. Exhausted work becomes `failed`; it does not loop forever.
 
@@ -57,8 +57,6 @@ Scheduler compaction creates a new generation containing a checksummed replaceme
 Project-local state:
 
 ```text
-.pi/autonomy/state.json                         latest run snapshot
-.pi/autonomy/events.jsonl                       checksummed run history
 .pi/refinement/ledger.jsonl                     refinement history
 .pi/refinement/quarantine.jsonl                 malformed ledger evidence
 .pi/python-skills/venvs/<content-hash>/          isolated Python environments
@@ -68,13 +66,17 @@ Private per-user operational state:
 
 ```text
 ${XDG_STATE_HOME:-~/.local/state}/omp-pantheon/autonomy/
-  <project-hash>/<run-id>/commands.jsonl
-  <project-hash>/<run-id>/scheduler/manifest.json
-  <project-hash>/<run-id>/scheduler/generations/<n>/snapshot.json
-  <project-hash>/<run-id>/scheduler/generations/<n>/events.jsonl
+  <project-hash>/state/state.json
+  <project-hash>/state/events.jsonl
+  <project-hash>/runs/<run-id>/commands.jsonl
+  <project-hash>/runs/<run-id>/scheduler/manifest.json
+  <project-hash>/runs/<run-id>/scheduler/generations/<n>/snapshot.json
+  <project-hash>/runs/<run-id>/scheduler/generations/<n>/events.jsonl
 ```
 
-Corrupt, non-contiguous, checksum-mismatched, or concurrent stale state fails closed. Run and refinement journals serialize read/check/append transitions; orphaned Python provisioning locks are reclaimed only after their owner is dead and their age exceeds the configured threshold.
+Corrupt, non-contiguous, checksum-mismatched, symlinked project state, or concurrent stale state fails closed. Run and refinement journals serialize read/check/append transitions; orphaned Python provisioning locks are reclaimed only after their owner is dead and their age exceeds the configured threshold. The controller also keeps the authoritative run state in process memory after loading it, so ordinary model-facing tool calls cannot replace it through project files.
+
+This is not a security boundary against arbitrary native code already running as the same OS user: such code can access that user's private state. The boundary protects the normal model tool surface, prevents repository content from acting as an executable queue, rejects project-state symlinks, and limits accidental disclosure to other local users. Run untrusted native code in an OS sandbox.
 
 ## Refinement approvals
 
@@ -84,7 +86,7 @@ Refinement is append-only and approval-gated:
 proposed → validated → approved → active → rolled_back
 ```
 
-Validation evidence is required before approval. Activation verifies that the proposal's base hash still matches the current artifact and serializes conflict detection with the append, so only one proposal can become active per artifact. Rejection, quarantine, and rollback retain their reasons in the ledger. No proposal self-approves.
+Validation evidence is required before approval. Approval is a host-adapter operation, not a registered model tool; `approvedBy` records the trusted host identity supplied by that adapter and is provenance, not independent authentication. Activation verifies that the proposal's base hash still matches the current artifact and serializes conflict detection with the append, so only one proposal can become active per artifact. Rejection, quarantine, and rollback retain their reasons in the ledger. No proposal self-approves.
 
 ## Python skill policy
 

@@ -36,37 +36,53 @@ async function breakStaleLock(
 	staleMs: number,
 	now: () => number,
 ): Promise<boolean> {
-	let ageMs: number;
-	let ownerPid: number | null = null;
+	const breakerPath = `${path}.breaker`;
+	let breaker: Awaited<ReturnType<typeof open>>;
 	try {
-		const [raw, metadata] = await Promise.all([readFile(path, "utf8"), stat(path)]);
-		ageMs = now() - metadata.mtimeMs;
-		try {
-			const parsed = JSON.parse(raw) as Partial<LockMetadata>;
-			if (typeof parsed.acquiredAt === "string") {
-				const acquiredAt = Date.parse(parsed.acquiredAt);
-				if (Number.isFinite(acquiredAt)) ageMs = now() - acquiredAt;
-			}
-			if (typeof parsed.pid === "number") ownerPid = parsed.pid;
-		} catch {
-			// Invalid metadata can be reclaimed only after the filesystem age is stale.
-		}
+		breaker = await open(breakerPath, "wx", 0o600);
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
 		throw error;
 	}
-	if (ageMs < staleMs || (ownerPid !== null && processIsAlive(ownerPid))) {
-		return false;
-	}
-	const stalePath = `${path}.stale-${randomUUID()}`;
 	try {
-		await rename(path, stalePath);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
-		return false;
+		let ageMs: number;
+		let ownerPid: number | null = null;
+		try {
+			const [raw, metadata] = await Promise.all([
+				readFile(path, "utf8"),
+				stat(path),
+			]);
+			ageMs = now() - metadata.mtimeMs;
+			try {
+				const parsed = JSON.parse(raw) as Partial<LockMetadata>;
+				if (typeof parsed.acquiredAt === "string") {
+					const acquiredAt = Date.parse(parsed.acquiredAt);
+					if (Number.isFinite(acquiredAt)) ageMs = now() - acquiredAt;
+				}
+				if (typeof parsed.pid === "number") ownerPid = parsed.pid;
+			} catch {
+				// Invalid metadata can be reclaimed only after the filesystem age is stale.
+			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+			throw error;
+		}
+		if (ageMs < staleMs || (ownerPid !== null && processIsAlive(ownerPid))) {
+			return false;
+		}
+		const stalePath = `${path}.stale-${randomUUID()}`;
+		try {
+			await rename(path, stalePath);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+			return false;
+		}
+		await rm(stalePath, { force: true });
+		return true;
+	} finally {
+		await breaker.close();
+		await rm(breakerPath, { force: true });
 	}
-	await rm(stalePath, { force: true });
-	return true;
 }
 
 export async function acquireFileLock(

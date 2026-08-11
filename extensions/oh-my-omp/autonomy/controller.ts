@@ -28,6 +28,7 @@ export interface AutonomyControllerOptions {
 export class AutonomyController {
 	private readonly now: () => string;
 	private readonly createId: () => string;
+	private cachedState: AutonomyRun | null | undefined;
 
 	constructor(
 		private readonly store: AutonomyStore,
@@ -38,7 +39,10 @@ export class AutonomyController {
 	}
 
 	async get(): Promise<AutonomyRun | null> {
-		return this.store.load();
+		if (this.cachedState === undefined) {
+			this.cachedState = await this.store.load();
+		}
+		return this.cachedState;
 	}
 
 	async start(args: StartAutonomyArgs): Promise<AutonomyRun> {
@@ -72,7 +76,7 @@ export class AutonomyController {
 			);
 		}
 
-		const existing = await this.store.load();
+		const existing = await this.get();
 		if (existing !== null && TERMINAL_STATUSES[existing.status] !== true) {
 			throw new AutonomyTransitionError(
 				`Autonomy run ${existing.id} is already ${existing.status}`,
@@ -100,6 +104,7 @@ export class AutonomyController {
 			updatedAt: timestamp,
 		};
 		await this.store.save(state, existing?.revision ?? 0);
+		this.cachedState = state;
 		return state;
 	}
 
@@ -293,7 +298,7 @@ export class AutonomyController {
 	}
 
 	private async requireState(): Promise<AutonomyRun> {
-		const state = await this.store.load();
+		const state = await this.get();
 		if (state === null) {
 			throw new AutonomyTransitionError("No autonomy run exists");
 		}
@@ -313,6 +318,7 @@ export class AutonomyController {
 	private async persist(state: AutonomyRun): Promise<AutonomyRun> {
 		const next = { ...state, revision: state.revision + 1 };
 		await this.store.save(next, state.revision);
+		this.cachedState = next;
 		return next;
 	}
 }

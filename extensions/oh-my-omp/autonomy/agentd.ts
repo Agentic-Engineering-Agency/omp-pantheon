@@ -8,7 +8,10 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 
 import { CommandJournal } from "./journal";
-import { autonomyRuntimeRoot } from "./runtime-paths";
+import {
+	autonomyRuntimeRoot,
+	prepareAutonomyRuntimeRoot,
+} from "./runtime-paths";
 import { PersistedScheduler } from "./scheduler";
 import { AutonomyWorker, OmpSessionExecutor } from "./worker";
 
@@ -70,7 +73,10 @@ export class AutonomyAgentd {
 					"--state-root",
 					stateRoot,
 				],
-				env: {},
+				env:
+					this.#stateHome === undefined
+						? {}
+						: { XDG_STATE_HOME: this.#stateHome },
 				cwd: this.root,
 				pty: false,
 				ready: {
@@ -180,6 +186,7 @@ async function runAgentd(args: string[]): Promise<void> {
 			"pantheon-agentd state root does not match project and run",
 		);
 	}
+	await prepareAutonomyRuntimeRoot(root, runId);
 	scrubAgentdEnvironment();
 	const journal = new CommandJournal(stateRoot, {
 		expectedRunId: runId,

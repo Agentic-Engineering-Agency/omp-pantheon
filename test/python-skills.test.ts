@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -128,6 +128,19 @@ describe("Python skill environment", () => {
 		expect(provisioned.reused).toBe(false);
 		expect(await Bun.file(provisioned.pythonPath).exists()).toBe(true);
 	}, 20_000);
+	test("refuses a symlinked project environment cache", async () => {
+		const root = await createRoot();
+		const outside = await createRoot();
+		await mkdir(join(root, ".pi", "python-skills"), { recursive: true });
+		await symlink(outside, join(root, ".pi", "python-skills", "venvs"), "dir");
+		const environment = new PythonSkillEnvironment(root, {
+			pythonPath: pythonPath ?? "python3",
+		});
+
+		await expect(environment.provision(validManifest())).rejects.toThrow(
+			"symbolic link",
+		);
+	});
 });
 
 describe("Python skill runner", () => {
