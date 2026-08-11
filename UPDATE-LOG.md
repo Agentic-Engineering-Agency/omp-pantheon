@@ -31,6 +31,9 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
   and resumes queued work only after `/autonomy resume`. Mutations observed
   while paused still advance the artifact revision and invalidate every gate
   without resuming execution.
+- Made `/autonomy cancel` persist its terminal state only after the worker
+  reports a terminal stop; stop errors and unsettled states leave the run active
+  and are reported to the caller.
 - Added approval-gated refinement and isolated Python skill contracts.
 - Added capability adapters for JSON-only kernel checkpoints and retained
   subagents. Both report unsupported on stock OMP 17.2.14 because the required

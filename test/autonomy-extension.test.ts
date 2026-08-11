@@ -882,6 +882,112 @@ describe("autonomy extension", () => {
 		expect(extension.notifications).not.toContain("Autonomy paused.");
 	});
 
+	test("does not persist cancellation until the worker confirms a terminal stop", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-cancel-stop-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-cancel-stop-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopping", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile: join(cwd, "session.jsonl") },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Cancel only after stop" --max-attempts=2',
+			extension.ctx,
+		);
+
+		await extension.commands.autonomy?.handler("cancel", extension.ctx);
+
+		const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+		expect(
+			(await new AutonomyStore(cwd, { stateDirectory }).load())?.status,
+		).toBe("running");
+		expect(extension.notifications.at(-1)).toContain(
+			"worker stop is not terminal",
+		);
+		expect(extension.notifications).not.toContain("Autonomy cancelled.");
+	});
+
+	test("does not persist cancellation when stopping the worker throws", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-cancel-error-"),
+		);
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-cancel-error-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop(): Promise<never> {
+								throw new Error("broker stop failed");
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile: join(cwd, "session.jsonl") },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Cancel after broker stop" --max-attempts=2',
+			extension.ctx,
+		);
+
+		await extension.commands.autonomy?.handler("cancel", extension.ctx);
+
+		const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+		expect(
+			(await new AutonomyStore(cwd, { stateDirectory }).load())?.status,
+		).toBe("running");
+		expect(extension.notifications.at(-1)).toContain("broker stop failed");
+		expect(extension.notifications).not.toContain("Autonomy cancelled.");
+	});
+
 	test("queues a persistent continuation and resumes its daemon in a new session", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-project-"));
 		const stateHome = await mkdtemp(join(tmpdir(), "pantheon-autonomy-state-"));

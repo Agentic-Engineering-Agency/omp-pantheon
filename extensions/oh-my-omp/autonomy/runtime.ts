@@ -174,14 +174,7 @@ export class AutonomyRuntime {
 		if (ACTIVE_STATUSES[state.status] !== true && state.status !== "paused") {
 			return controller.pause();
 		}
-		if (this.agentd !== null) {
-			const worker = await this.agentd.stop(state.id);
-			if (!TERMINAL_WORKER_STATES.has(worker.state)) {
-				throw new AutonomyTransitionError(
-					`Autonomy worker stop is not terminal: ${worker.state}`,
-				);
-			}
-		}
+		await this.stopAgentdAndRequireTerminal(state.id);
 		return controller.pause();
 	}
 
@@ -198,9 +191,13 @@ export class AutonomyRuntime {
 	}
 
 	async cancel(): Promise<AutonomyRun> {
-		const state = await (await this.requireController()).cancel();
-		await this.stopAgentd(state.id);
-		return state;
+		const controller = await this.requireController();
+		const state = await controller.get();
+		if (state === null) {
+			throw new AutonomyTransitionError("No autonomy run exists");
+		}
+		await this.stopAgentdAndRequireTerminal(state.id);
+		return controller.cancel();
 	}
 
 	async runVerification(signal?: AbortSignal): Promise<AutonomyRun> {
@@ -394,6 +391,16 @@ export class AutonomyRuntime {
 			"Produce current objective evidence; completion promises and prose do not satisfy gates.",
 			"</system-reminder>",
 		].join("\n");
+	}
+
+	private async stopAgentdAndRequireTerminal(runId: string): Promise<void> {
+		if (this.agentd === null) return;
+		const worker = await this.agentd.stop(runId);
+		if (!TERMINAL_WORKER_STATES.has(worker.state)) {
+			throw new AutonomyTransitionError(
+				`Autonomy worker stop is not terminal: ${worker.state}`,
+			);
+		}
 	}
 
 	private async stopAgentd(runId?: string): Promise<void> {
