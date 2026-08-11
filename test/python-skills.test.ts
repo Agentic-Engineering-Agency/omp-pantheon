@@ -214,7 +214,6 @@ describe("Python skill environment", () => {
 	});
 
 	test("kills the provisioning process tree on timeout", async () => {
-		if (!pythonPath) throw new Error("python3 is required for this test");
 		if (process.platform === "win32") return;
 		const root = await createRoot();
 		const pidPath = join(root, "provision-child.pid");
@@ -222,17 +221,17 @@ describe("Python skill environment", () => {
 		await writeFile(
 			fakePython,
 			[
-				`#!${pythonPath}`,
-				"import pathlib, subprocess, sys, time",
-				`child = subprocess.Popen([sys.executable, \"-c\", \"import time; time.sleep(60)\"])`,
-				`pathlib.Path(${JSON.stringify(pidPath)}).write_text(str(child.pid))`,
-				"time.sleep(60)",
+				"#!/bin/sh",
+				"sleep 60 &",
+				"child=$!",
+				`printf '%s' "$child" > ${JSON.stringify(pidPath)}`,
+				'wait "$child"',
 			].join("\n"),
 		);
 		await chmod(fakePython, 0o755);
 		const environment = new PythonSkillEnvironment(root, {
 			pythonPath: fakePython,
-			provisioningTimeoutMs: 300,
+			provisioningTimeoutMs: 1_000,
 		});
 
 		await expect(environment.provision(validManifest())).rejects.toThrow(
