@@ -3,30 +3,21 @@
  *
  * Responsibilities:
  *   - Advertise the bundled skills directory via `resources_discover`.
- *   - Register the loop runtime (ralph / ulw) and hook it to `agent_end`,
- *     plus the loop control commands (`/ralph-loop`, `/ulw-loop`,
- *     `/cancel-ralph`, `/stop-continuation`).
- *   - Register the lifecycle hooks: `evalfly-enforcement-gate` and
- *     `todo-enforcer` (session_stop continuations), `evalfly-trace-capture`
- *     (opt-in sanitized metadata buffer), `evalfly-advisor` (non-blocking
- *     evidence reminder), `comment-checker` (tool_result on edit/write),
- *     `intent-gate` (before_agent_start directive).
- *   - Markdown slash commands (/ulw, /ultrawork, /init-deep, /refactor,
- *     /handoff, /start-work, /remove-ai-slops, /omomomo), agents, and
- *     skills ship as plain files discovered by OMP; nothing to wire here.
+ *   - Register opt-in, gate-verified autonomy backed by native OMP goals.
+ *   - Register lifecycle hooks for EvalFly, todos, comments, and intent.
+ *   - Markdown commands, agents, and skills ship as files discovered by OMP.
  */
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
+import { registerAutonomy } from "./autonomy/runtime";
 import { registerEvalFlyEnforcementGate } from "./evalfly/enforcement-gate";
 import { registerEvalFlyTraceCapture } from "./evalfly/trace-buffer";
 import { registerCommentChecker } from "./hooks/comment-checker";
 import { registerEvalFlyAdvisor } from "./hooks/evalfly-advisor";
 import { registerIntentGate } from "./hooks/intent-gate";
 import { registerTodoEnforcer } from "./hooks/todo-enforcer";
-import { registerLoopCommands } from "./loop/commands";
-import { LoopRuntime } from "./loop/runtime";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SKILLS_DIR = path.resolve(HERE, "../../skills");
@@ -48,14 +39,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		});
 	});
 
-	// Loop runtime: state-machine driven by `agent_end`.
-	const runtime = new LoopRuntime(pi);
-	pi.on("session_start", (_event, ctx) => runtime.attach(ctx));
-	pi.on("session_switch", (_event, ctx) => runtime.attach(ctx));
-	pi.on("session_branch", (_event, ctx) => runtime.attach(ctx));
-	pi.on("agent_end", (event, ctx) => runtime.onAgentEnd(event, ctx));
-
-	registerLoopCommands(pi, runtime);
+	// Verified autonomy: no state means no autonomous behavior.
+	registerAutonomy(pi);
 
 	// Lifecycle hooks: advisory context plus discipline enforcement.
 	registerEvalFlyEnforcementGate(pi);

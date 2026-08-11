@@ -135,7 +135,7 @@ function filePathOf(input: unknown): string | undefined {
 	const h = HASHLINE_HEADER_RE.exec(blob);
 	if (h) return h[1];
 	const p = PATCH_FILE_RE.exec(blob);
-	if (p) return p[1].trim();
+	if (p?.[1]) return p[1].trim();
 	return undefined;
 }
 

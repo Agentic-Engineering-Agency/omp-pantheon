@@ -1,3 +1,4 @@
+import type { AutonomyStore } from "./store";
 import type {
 	AutonomyCompletionDecision,
 	AutonomyGateRecord,
@@ -5,7 +6,6 @@ import type {
 	RecordAutonomyGateArgs,
 	StartAutonomyArgs,
 } from "./types";
-import { AutonomyStore } from "./store";
 
 const TERMINAL_STATUSES: Partial<Record<AutonomyRun["status"], true>> = {
 	succeeded: true,
