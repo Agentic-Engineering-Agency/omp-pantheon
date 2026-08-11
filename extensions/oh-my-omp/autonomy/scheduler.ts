@@ -5,10 +5,10 @@ import {
 	readFile,
 	rename,
 	rm,
-	stat,
 	writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { acquireFileLock } from "../file-lock";
 
 import type { CommandJournal, WorkerCommand } from "./journal";
 
@@ -17,9 +17,8 @@ const MANIFEST_FILE = "manifest.json";
 const GENERATIONS_DIRECTORY = "generations";
 const SNAPSHOT_FILE = "snapshot.json";
 const EVENTS_FILE = "events.jsonl";
-const LOCK_DIRECTORY = "scheduler.lock";
+const LOCK_FILE = "scheduler.lock";
 const LOCK_STALE_MS = 30_000;
-const LOCK_RETRY_MS = 10;
 const LOCK_TIMEOUT_MS = 5_000;
 
 export interface ScheduleRequest {
@@ -91,6 +90,8 @@ interface SchedulerOptions {
 	now?: () => number;
 	maxRetries?: number;
 	baseRetryMs?: number;
+	lockTimeoutMs?: number;
+	lockStaleMs?: number;
 }
 
 export class SchedulerError extends Error {
@@ -108,6 +109,8 @@ export class PersistedScheduler {
 	readonly #now: () => number;
 	readonly #maxRetries: number;
 	readonly #baseRetryMs: number;
+	readonly #lockTimeoutMs: number;
+	readonly #lockStaleMs: number;
 
 	constructor(
 		root: string,
@@ -117,15 +120,27 @@ export class PersistedScheduler {
 		this.#directory = join(root, SCHEDULER_DIRECTORY);
 		this.#manifestPath = join(this.#directory, MANIFEST_FILE);
 		this.#generationsPath = join(this.#directory, GENERATIONS_DIRECTORY);
-		this.#lockPath = join(this.#directory, LOCK_DIRECTORY);
+		this.#lockPath = join(this.#directory, LOCK_FILE);
 		this.#now = options.now ?? Date.now;
 		this.#maxRetries = options.maxRetries ?? 5;
 		this.#baseRetryMs = options.baseRetryMs ?? 1_000;
+		this.#lockTimeoutMs = options.lockTimeoutMs ?? LOCK_TIMEOUT_MS;
+		this.#lockStaleMs = options.lockStaleMs ?? LOCK_STALE_MS;
 		if (!Number.isInteger(this.#maxRetries) || this.#maxRetries <= 0) {
 			throw new SchedulerError("Maximum retries must be a positive integer");
 		}
 		if (!Number.isInteger(this.#baseRetryMs) || this.#baseRetryMs <= 0) {
 			throw new SchedulerError("Base retry delay must be a positive integer");
+		}
+		if (
+			!Number.isInteger(this.#lockTimeoutMs) ||
+			this.#lockTimeoutMs <= 0 ||
+			!Number.isInteger(this.#lockStaleMs) ||
+			this.#lockStaleMs <= 0
+		) {
+			throw new SchedulerError(
+				"Scheduler lock timeout and stale age must be positive integers",
+			);
 		}
 	}
 
@@ -673,29 +688,10 @@ export class PersistedScheduler {
 
 	async #acquireLock(): Promise<() => Promise<void>> {
 		await mkdir(this.#directory, { recursive: true });
-		const startedAt = Date.now();
-		while (true) {
-			try {
-				await mkdir(this.#lockPath);
-				return async () => rm(this.#lockPath, { recursive: true, force: true });
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-				try {
-					const details = await stat(this.#lockPath);
-					if (Date.now() - details.mtimeMs > LOCK_STALE_MS) {
-						await rm(this.#lockPath, { recursive: true, force: true });
-						continue;
-					}
-				} catch (statError) {
-					if ((statError as NodeJS.ErrnoException).code === "ENOENT") continue;
-					throw statError;
-				}
-				if (Date.now() - startedAt >= LOCK_TIMEOUT_MS) {
-					throw new SchedulerError("Timed out acquiring scheduler lock");
-				}
-				await Bun.sleep(LOCK_RETRY_MS);
-			}
-		}
+		return acquireFileLock(this.#lockPath, {
+			timeoutMs: this.#lockTimeoutMs,
+			staleMs: this.#lockStaleMs,
+		});
 	}
 }
 

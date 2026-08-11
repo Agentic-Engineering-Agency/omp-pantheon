@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	utimes,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -48,7 +55,12 @@ function request(
 }
 
 async function fixture(
-	options: { maxRetries?: number; baseRetryMs?: number } = {},
+	options: {
+		maxRetries?: number;
+		baseRetryMs?: number;
+		lockTimeoutMs?: number;
+		lockStaleMs?: number;
+	} = {},
 ) {
 	const root = await mkdtemp(join(tmpdir(), "pantheon-scheduler-"));
 	roots.push(root);
@@ -66,6 +78,8 @@ async function fixture(
 			now: clock,
 			maxRetries: options.maxRetries,
 			baseRetryMs: options.baseRetryMs,
+			lockTimeoutMs: options.lockTimeoutMs,
+			lockStaleMs: options.lockStaleMs,
 		}),
 		setNow(value: string) {
 			now = Date.parse(value);
@@ -235,6 +249,29 @@ describe("PersistedScheduler", () => {
 			fencingToken: 2,
 		});
 		expect(await firstFixture.scheduler.claimDue("worker-c", 5_000)).toBeNull();
+	});
+
+	test("does not steal an old lock from a live scheduler process", async () => {
+		const { root, scheduler } = await fixture({
+			lockTimeoutMs: 30,
+			lockStaleMs: 1,
+		});
+		const lockPath = join(root, "scheduler", "scheduler.lock");
+		await mkdir(join(root, "scheduler"), { recursive: true });
+		await writeFile(
+			lockPath,
+			JSON.stringify({
+				token: "live-owner",
+				pid: process.pid,
+				acquiredAt: "2000-01-01T00:00:00.000Z",
+			}),
+		);
+		await utimes(lockPath, new Date(0), new Date(0));
+
+		await expect(
+			scheduler.schedule(request("wake-live", "command-live")),
+		).rejects.toThrow("Timed out acquiring lock");
+		expect(await readFile(lockPath, "utf8")).toContain('"live-owner"');
 	});
 
 	test("compacts into verified generations and keeps the prior generation", async () => {
