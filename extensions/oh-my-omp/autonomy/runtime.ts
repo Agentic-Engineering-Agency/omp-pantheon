@@ -4,6 +4,7 @@ import type {
 	ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent";
 
+import { type AgentdStatus, AutonomyAgentd } from "./agentd";
 import { registerAutonomyCommands } from "./commands";
 import { AutonomyController, AutonomyTransitionError } from "./controller";
 import { AutonomyStore } from "./store";
@@ -47,18 +48,24 @@ function parseGateEvidence(params: unknown): {
 
 export class AutonomyRuntime {
 	private controller: AutonomyController | null = null;
+	private agentd: AutonomyAgentd | null = null;
 	private cwd: string | null = null;
 
 	constructor(private readonly pi: ExtensionAPI) {}
 
-	async attach(ctx: Pick<ExtensionContext, "cwd">): Promise<void> {
+	async attach(
+		ctx: Pick<ExtensionContext, "cwd"> &
+			Partial<Pick<ExtensionContext, "sessionManager">>,
+	): Promise<void> {
 		if (this.cwd === ctx.cwd && this.controller !== null) return;
+		this.agentd?.close();
 		this.cwd = ctx.cwd;
 		this.controller = new AutonomyController(new AutonomyStore(ctx.cwd));
+		this.agentd = "sessionManager" in ctx ? new AutonomyAgentd(ctx.cwd) : null;
 	}
 
 	async start(task: string, maxAttempts: number): Promise<AutonomyRun> {
-		return (await this.requireController()).start({
+		const state = await (await this.requireController()).start({
 			task,
 			maxAttempts,
 			gates: [
@@ -66,10 +73,20 @@ export class AutonomyRuntime {
 				{ id: "verification", label: "Targeted verification" },
 			],
 		});
+		await this.agentd?.start();
+		return state;
 	}
 
 	async get(): Promise<AutonomyRun | null> {
 		return (await this.requireController()).get();
+	}
+	async getWorkerStatus(): Promise<AgentdStatus | null> {
+		if (!this.agentd) return null;
+		try {
+			return await this.agentd.status();
+		} catch {
+			return { state: "stopped", restartCount: 0 };
+		}
 	}
 
 	async pause(): Promise<AutonomyRun> {
@@ -81,7 +98,15 @@ export class AutonomyRuntime {
 	}
 
 	async cancel(): Promise<AutonomyRun> {
-		return (await this.requireController()).cancel();
+		const state = await (await this.requireController()).cancel();
+		if (this.agentd) {
+			try {
+				await this.agentd.stop();
+			} catch {
+				this.pi.logger.debug("Autonomy worker was already stopped");
+			}
+		}
+		return state;
 	}
 
 	async recordGate(args: {
@@ -149,6 +174,11 @@ export class AutonomyRuntime {
 		);
 	}
 
+	close(): void {
+		this.agentd?.close();
+		this.agentd = null;
+	}
+
 	private async requireController(): Promise<AutonomyController> {
 		if (this.controller === null) {
 			throw new AutonomyTransitionError(
@@ -166,6 +196,7 @@ export function registerAutonomy(pi: ExtensionAPI): AutonomyRuntime {
 	pi.on("session_branch", (_event, ctx) => runtime.attach(ctx));
 	pi.on("goal_updated", (event) => runtime.onGoalUpdated(event));
 	pi.on("agent_end", (event) => runtime.onAgentEnd(event));
+	pi.on("session_shutdown", () => runtime.close());
 	registerAutonomyCommands(pi, runtime);
 
 	const z = pi.zod;

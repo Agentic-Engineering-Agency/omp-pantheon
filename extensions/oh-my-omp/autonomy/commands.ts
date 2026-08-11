@@ -90,11 +90,14 @@ export function registerAutonomyCommands(
 						return;
 					}
 					case "status": {
-						const state = await runtime.get();
+						const [state, worker] = await Promise.all([
+							runtime.get(),
+							runtime.getWorkerStatus(),
+						]);
 						ctx.ui.notify(
 							state === null
 								? "No autonomy run exists."
-								: `Autonomy ${state.status}; attempt ${state.attempt}/${state.maxAttempts}; artifact ${state.artifactRevision}; gates ${state.gates.map((gate) => `${gate.id}=${gate.status}`).join(", ")}`,
+								: `Autonomy ${state.status}; attempt ${state.attempt}/${state.maxAttempts}; artifact ${state.artifactRevision}; gates ${state.gates.map((gate) => `${gate.id}=${gate.status}`).join(", ")}; worker ${worker?.state ?? "unsupported"}`,
 							state === null ? "warning" : "info",
 						);
 						return;
