@@ -13,6 +13,7 @@ import type { AutonomyRun } from "./types";
 interface NativeGoalUpdatedEvent {
 	goal: {
 		id: string;
+		objective: string;
 		status: string;
 	} | null;
 }
@@ -22,36 +23,46 @@ const ACTIVE_STATUSES: Partial<Record<AutonomyRun["status"], true>> = {
 	waiting: true,
 };
 
-function parseGateEvidence(params: unknown): {
-	gateId: string;
+export interface VerificationReceipt {
 	status: "pass" | "fail";
 	evidence: string;
-} {
-	if (
-		typeof params !== "object" ||
-		params === null ||
-		!("gateId" in params) ||
-		typeof params.gateId !== "string" ||
-		!("status" in params) ||
-		(params.status !== "pass" && params.status !== "fail") ||
-		!("evidence" in params) ||
-		typeof params.evidence !== "string"
-	) {
-		throw new AutonomyTransitionError("Invalid autonomy gate evidence");
-	}
-	return {
-		gateId: params.gateId,
-		status: params.status,
-		evidence: params.evidence,
-	};
 }
+
+export interface VerificationRunner {
+	verify(cwd: string, command: string, signal?: AbortSignal): Promise<VerificationReceipt>;
+}
+
+const defaultVerificationRunner: VerificationRunner = {
+	async verify(cwd, command, signal) {
+		const child = Bun.spawn({
+			cmd: [process.env.SHELL ?? "/bin/sh", "-lc", command],
+			cwd,
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		const abort = (): void => child.kill("SIGKILL");
+		signal?.addEventListener("abort", abort, { once: true });
+		try {
+			const exitCode = await child.exited;
+			return {
+				status: exitCode === 0 ? "pass" : "fail",
+				evidence: `command:${command}:exit:${exitCode}`,
+			};
+		} finally {
+			signal?.removeEventListener("abort", abort);
+		}
+	},
+};
 
 export class AutonomyRuntime {
 	private controller: AutonomyController | null = null;
 	private agentd: AutonomyAgentd | null = null;
 	private cwd: string | null = null;
 
-	constructor(private readonly pi: ExtensionAPI) {}
+	constructor(
+		private readonly pi: ExtensionAPI,
+		private readonly verifier: VerificationRunner = defaultVerificationRunner,
+	) {}
 
 	async attach(
 		ctx: Pick<ExtensionContext, "cwd"> &
@@ -64,16 +75,21 @@ export class AutonomyRuntime {
 		this.agentd = "sessionManager" in ctx ? new AutonomyAgentd(ctx.cwd) : null;
 	}
 
-	async start(task: string, maxAttempts: number): Promise<AutonomyRun> {
+	async start(
+		task: string,
+		maxAttempts: number,
+		verificationCommand: string,
+	): Promise<AutonomyRun> {
 		const state = await (await this.requireController()).start({
 			task,
 			maxAttempts,
+			verificationCommand,
 			gates: [
 				{ id: "native-goal", label: "OMP native goal" },
-				{ id: "verification", label: "Targeted verification" },
+				{ id: "verification", label: "Trusted verification command" },
 			],
 		});
-		await this.agentd?.start();
+		await this.agentd?.start(state.id);
 		return state;
 	}
 
@@ -82,8 +98,10 @@ export class AutonomyRuntime {
 	}
 	async getWorkerStatus(): Promise<AgentdStatus | null> {
 		if (!this.agentd) return null;
+		const state = await (await this.requireController()).get();
+		if (state === null) return null;
 		try {
-			return await this.agentd.status();
+			return await this.agentd.status(state.id);
 		} catch {
 			return { state: "stopped", restartCount: 0 };
 		}
@@ -99,35 +117,33 @@ export class AutonomyRuntime {
 
 	async cancel(): Promise<AutonomyRun> {
 		const state = await (await this.requireController()).cancel();
-		if (this.agentd) {
-			try {
-				await this.agentd.stop();
-			} catch {
-				this.pi.logger.debug("Autonomy worker was already stopped");
-			}
-		}
+		await this.stopAgentd(state.id);
 		return state;
 	}
 
-	async recordGate(args: {
-		gateId: string;
-		status: "pass" | "fail";
-		evidence: string;
-	}): Promise<AutonomyRun> {
+	async runVerification(signal?: AbortSignal): Promise<AutonomyRun> {
 		const controller = await this.requireController();
 		const state = await controller.get();
 		if (state === null) {
 			throw new AutonomyTransitionError("No autonomy run exists");
 		}
+		const receipt = await this.verifier.verify(
+			this.cwd ?? "",
+			state.verificationCommand,
+			signal,
+		);
 		return controller.recordGate({
-			...args,
+			gateId: "verification",
+			status: receipt.status,
+			evidence: receipt.evidence,
+			reporter: "host-verifier",
 			attempt: state.attempt,
 			artifactRevision: state.artifactRevision,
 		});
 	}
 
 	async onGoalUpdated(event: NativeGoalUpdatedEvent): Promise<void> {
-		if (event.goal?.status !== "complete") return;
+		if (event.goal === null) return;
 		const controller = await this.requireController();
 		const state = await controller.get();
 		if (
@@ -137,10 +153,29 @@ export class AutonomyRuntime {
 		) {
 			return;
 		}
+		if (state.nativeGoalId === undefined) {
+			if (
+				event.goal.status === "active" &&
+				event.goal.objective.trim() === state.task
+			) {
+				await controller.bindNativeGoal({
+					id: event.goal.id,
+					objective: event.goal.objective,
+				});
+			}
+			return;
+		}
+		if (
+			event.goal.id !== state.nativeGoalId ||
+			event.goal.status !== "complete"
+		) {
+			return;
+		}
 		await controller.recordGate({
 			gateId: "native-goal",
 			status: "pass",
 			evidence: `goal:${event.goal.id}:complete`,
+			reporter: "native-goal-event",
 			attempt: state.attempt,
 			artifactRevision: state.artifactRevision,
 		});
@@ -156,11 +191,13 @@ export class AutonomyRuntime {
 			this.pi.logger.info(
 				"Autonomy run succeeded after objective gates passed",
 			);
+			await this.stopAgentd(state.id);
 			return;
 		}
 		const continuation = await controller.continueAfterIncomplete();
 		if (continuation.failed) {
 			this.pi.logger.warn("Autonomy run failed at its maximum attempt bound");
+			await this.stopAgentd(state.id);
 			return;
 		}
 		this.pi.sendUserMessage(
@@ -174,9 +211,22 @@ export class AutonomyRuntime {
 		);
 	}
 
-	close(): void {
+	async close(): Promise<void> {
+		await this.stopAgentd();
 		this.agentd?.close();
 		this.agentd = null;
+	}
+
+	private async stopAgentd(runId?: string): Promise<void> {
+		if (!this.agentd) return;
+		const resolvedRunId =
+			runId ?? (await (await this.requireController()).get())?.id;
+		if (resolvedRunId === undefined) return;
+		try {
+			await this.agentd.stop(resolvedRunId);
+		} catch {
+			this.pi.logger.debug("Autonomy worker was already stopped");
+		}
 	}
 
 	private async requireController(): Promise<AutonomyController> {
@@ -189,8 +239,11 @@ export class AutonomyRuntime {
 	}
 }
 
-export function registerAutonomy(pi: ExtensionAPI): AutonomyRuntime {
-	const runtime = new AutonomyRuntime(pi);
+export function registerAutonomy(
+	pi: ExtensionAPI,
+	verifier: VerificationRunner = defaultVerificationRunner,
+): AutonomyRuntime {
+	const runtime = new AutonomyRuntime(pi, verifier);
 	pi.on("session_start", (_event, ctx) => runtime.attach(ctx));
 	pi.on("session_switch", (_event, ctx) => runtime.attach(ctx));
 	pi.on("session_branch", (_event, ctx) => runtime.attach(ctx));
@@ -202,31 +255,25 @@ export function registerAutonomy(pi: ExtensionAPI): AutonomyRuntime {
 	const z = pi.zod;
 	pi.registerTool({
 		name: "autonomy_gate",
-		label: "Autonomy Gate",
+		label: "Autonomy Verification",
 		description:
-			"Record concrete pass/fail evidence for a configured Pantheon autonomy completion gate",
-		parameters: z.object({
-			gateId: z.string().describe("Configured gate identifier"),
-			status: z.enum(["pass", "fail"]).describe("Observed gate outcome"),
-			evidence: z
-				.string()
-				.describe("Concrete command, report, or artifact evidence"),
-		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			"Run the user-configured verification command and record its host-observed exit status; native goal completion is event-owned",
+		parameters: z.object({}),
+		async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
 			await runtime.attach(ctx);
-			const gateEvidence = parseGateEvidence(params);
-			const state = await runtime.recordGate(gateEvidence);
+			const state = await runtime.runVerification(signal);
+			const gate = state.gates.find((candidate) => candidate.id === "verification");
 			return {
 				content: [
 					{
 						type: "text",
-						text: `Autonomy gate ${gateEvidence.gateId}=${gateEvidence.status} recorded for attempt ${state.attempt}, artifact ${state.artifactRevision}.`,
+						text: `Trusted verification ${gate?.status ?? "unknown"} recorded for attempt ${state.attempt}, artifact ${state.artifactRevision}.`,
 					},
 				],
 				details: {
 					runId: state.id,
-					gateId: gateEvidence.gateId,
-					status: gateEvidence.status,
+					gateId: "verification",
+					status: gate?.status,
 					attempt: state.attempt,
 					artifactRevision: state.artifactRevision,
 				},

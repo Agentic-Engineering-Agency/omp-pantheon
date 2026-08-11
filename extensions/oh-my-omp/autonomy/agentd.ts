@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 
 import { createDaemonBrokerClient } from "@oh-my-pi/pi-coding-agent/launch/client";
@@ -8,10 +8,11 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 
 import { CommandJournal } from "./journal";
+import { autonomyRuntimeRoot } from "./runtime-paths";
 import { PersistedScheduler } from "./scheduler";
 import { AutonomyWorker, OmpSessionExecutor } from "./worker";
 
-const DAEMON_NAME = "pantheon-agentd";
+const DAEMON_NAME_PREFIX = "pantheon-agentd";
 const READY_LINE = "pantheon-agentd ready";
 
 export interface BrokerClient {
@@ -23,6 +24,7 @@ interface AgentdOptions {
 	broker?: BrokerClient;
 	entrypoint?: string;
 	executable?: string;
+	stateHome?: string;
 }
 
 export interface AgentdStatus {
@@ -35,6 +37,7 @@ export class AutonomyAgentd {
 	readonly #brokerPromise: Promise<BrokerClient>;
 	readonly #entrypoint: string;
 	readonly #executable: string;
+	readonly #stateHome?: string;
 
 	constructor(
 		private readonly root: string,
@@ -45,17 +48,28 @@ export class AutonomyAgentd {
 			: createDaemonBrokerClient(root);
 		this.#entrypoint = options.entrypoint ?? import.meta.filename;
 		this.#executable = options.executable ?? process.execPath;
+		this.#stateHome = options.stateHome;
 	}
 
-	async start(): Promise<AgentdStatus> {
+	async start(runId: string): Promise<AgentdStatus> {
 		const broker = await this.#brokerPromise;
+		const daemonName = this.#daemonName(runId);
+		const stateRoot = autonomyRuntimeRoot(this.root, runId, this.#stateHome);
 		const result = await broker.request({
 			op: "start",
-			owner: DAEMON_NAME,
+			owner: daemonName,
 			spec: {
-				name: DAEMON_NAME,
+				name: daemonName,
 				application: this.#executable,
-				args: [this.#entrypoint, "--root", this.root],
+				args: [
+					this.#entrypoint,
+					"--root",
+					this.root,
+					"--run-id",
+					runId,
+					"--state-root",
+					stateRoot,
+				],
 				env: {},
 				cwd: this.root,
 				pty: false,
@@ -71,19 +85,19 @@ export class AutonomyAgentd {
 		return this.#statusFromResult(result);
 	}
 
-	async status(): Promise<AgentdStatus> {
+	async status(runId: string): Promise<AgentdStatus> {
 		const broker = await this.#brokerPromise;
 		return this.#statusFromResult(
-			await broker.request({ op: "describe", name: DAEMON_NAME }),
+			await broker.request({ op: "describe", name: this.#daemonName(runId) }),
 		);
 	}
 
-	async stop(): Promise<AgentdStatus> {
+	async stop(runId: string): Promise<AgentdStatus> {
 		const broker = await this.#brokerPromise;
 		return this.#statusFromResult(
 			await broker.request({
 				op: "stop",
-				name: DAEMON_NAME,
+				name: this.#daemonName(runId),
 				timeoutMs: 5_000,
 			}),
 		);
@@ -91,6 +105,11 @@ export class AutonomyAgentd {
 
 	close(): void {
 		void this.#brokerPromise.then((broker) => broker.close());
+	}
+
+	#daemonName(runId: string): string {
+		const suffix = createHash("sha256").update(runId).digest("hex").slice(0, 12);
+		return `${DAEMON_NAME_PREFIX}-${suffix}`;
 	}
 
 	#statusFromResult(result: unknown): AgentdStatus {
@@ -119,16 +138,48 @@ export class AutonomyAgentd {
 	}
 }
 
-function parseRoot(args: string[]): string {
-	const rootIndex = args.indexOf("--root");
-	const root = rootIndex >= 0 ? args[rootIndex + 1] : undefined;
-	if (!root) throw new Error("pantheon-agentd requires --root <project>");
-	return resolve(root);
+function parseRequiredArgument(args: string[], name: string): string {
+	const index = args.indexOf(name);
+	const value = index >= 0 ? args[index + 1] : undefined;
+	if (!value) throw new Error(`pantheon-agentd requires ${name} <value>`);
+	return value;
+}
+
+function scrubAgentdEnvironment(): void {
+	const allowed = new Set([
+		"HOME",
+		"PATH",
+		"TMPDIR",
+		"TMP",
+		"TEMP",
+		"USER",
+		"SHELL",
+		"LANG",
+		"LC_ALL",
+		"TERM",
+		"XDG_CONFIG_HOME",
+		"XDG_CACHE_HOME",
+		"XDG_DATA_HOME",
+		"XDG_STATE_HOME",
+	]);
+	for (const name of Object.keys(process.env)) {
+		if (!allowed.has(name)) delete process.env[name];
+	}
 }
 
 async function runAgentd(args: string[]): Promise<void> {
-	const root = parseRoot(args);
-	const journal = new CommandJournal(root);
+	const root = resolve(parseRequiredArgument(args, "--root"));
+	const runId = parseRequiredArgument(args, "--run-id");
+	const stateRoot = resolve(parseRequiredArgument(args, "--state-root"));
+	const expectedStateRoot = resolve(autonomyRuntimeRoot(root, runId));
+	if (stateRoot !== expectedStateRoot) {
+		throw new Error("pantheon-agentd state root does not match project and run");
+	}
+	scrubAgentdEnvironment();
+	const journal = new CommandJournal(stateRoot, {
+		expectedRunId: runId,
+		expectedCwd: root,
+	});
 	const worker = new AutonomyWorker(
 		journal,
 		new OmpSessionExecutor(),
@@ -136,7 +187,7 @@ async function runAgentd(args: string[]): Promise<void> {
 			workerId: `agentd-${process.pid}-${randomUUID()}`,
 			leaseMs: 60_000,
 		},
-		new PersistedScheduler(root, journal),
+		new PersistedScheduler(stateRoot, journal),
 	);
 	const shutdown = new AbortController();
 	const stop = (): void => shutdown.abort();

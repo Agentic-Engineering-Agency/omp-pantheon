@@ -24,9 +24,11 @@ function command(id: string): WorkerCommand {
 	return {
 		schemaVersion: 1,
 		id,
+		runId: "run-1",
 		cwd: "/tmp/project",
 		sessionFile: "/tmp/session.jsonl",
 		prompt: `Continue ${id}`,
+		maxAttempts: 3,
 		createdAt: "2026-08-11T12:00:00.000Z",
 	};
 }
@@ -52,7 +54,11 @@ async function fixture(
 	roots.push(root);
 	let now = Date.parse("2026-08-11T12:00:00.000Z");
 	const clock = () => now;
-	const journal = new CommandJournal(root, { now: clock });
+	const journal = new CommandJournal(root, {
+		now: clock,
+		expectedRunId: "run-1",
+		expectedCwd: "/tmp/project",
+	});
 	return {
 		root,
 		journal,
@@ -126,15 +132,7 @@ describe("PersistedScheduler", () => {
 		});
 		expect((await journal.list())[0]?.command.id).toBe("command-wake");
 		const raw = await readFile(
-			join(
-				root,
-				".pi",
-				"autonomy",
-				"scheduler",
-				"generations",
-				"1",
-				"events.jsonl",
-			),
+			join(root, "scheduler", "generations", "1", "events.jsonl"),
 			"utf8",
 		);
 		expect(raw.indexOf('"type":"claimed"')).toBeLessThan(
@@ -248,7 +246,7 @@ describe("PersistedScheduler", () => {
 
 		const manifest = JSON.parse(
 			await readFile(
-				join(root, ".pi", "autonomy", "scheduler", "manifest.json"),
+				join(root, "scheduler", "manifest.json"),
 				"utf8",
 			),
 		) as {
@@ -266,8 +264,6 @@ describe("PersistedScheduler", () => {
 				await readFile(
 					join(
 						root,
-						".pi",
-						"autonomy",
 						"scheduler",
 						"generations",
 						String(generation),

@@ -25,9 +25,11 @@ function command(id = "command-1"): WorkerCommand {
 	return {
 		schemaVersion: 1,
 		id,
+		runId: "run-1",
 		cwd: "/tmp/project",
 		sessionFile: "/tmp/session.jsonl",
 		prompt: "Continue the verified goal.",
+		maxAttempts: 3,
 		createdAt: "2026-08-11T12:00:00.000Z",
 	};
 }
@@ -38,7 +40,11 @@ async function createJournal() {
 	let now = Date.parse("2026-08-11T12:00:00.000Z");
 	return {
 		root,
-		journal: new CommandJournal(root, { now: () => now }),
+		journal: new CommandJournal(root, {
+			now: () => now,
+			expectedRunId: "run-1",
+			expectedCwd: "/tmp/project",
+		}),
 		setNow(value: string) {
 			now = Date.parse(value);
 		},
@@ -86,6 +92,17 @@ describe("CommandJournal", () => {
 		});
 		expect(acknowledged.status).toBe("acknowledged");
 	});
+
+	test("rejects commands outside the bound run and project", async () => {
+		const { journal } = await createJournal();
+
+		await expect(
+			journal.enqueue({ ...command(), runId: "other-run" }),
+		).rejects.toThrow("invalid shape");
+		await expect(
+			journal.enqueue({ ...command(), cwd: "/tmp/other-project" }),
+		).rejects.toThrow("invalid shape");
+	});
 });
 
 describe("AutonomyWorker", () => {
@@ -97,10 +114,7 @@ describe("AutonomyWorker", () => {
 			async execute() {
 				const [record] = await journal.list();
 				observed.push(record?.status ?? "missing");
-				const raw = await readFile(
-					join(root, ".pi", "autonomy", "commands.jsonl"),
-					"utf8",
-				);
+				const raw = await readFile(join(root, "commands.jsonl"), "utf8");
 				expect(raw).toContain('"type":"claimed"');
 				return {
 					sessionId: "session-1",
@@ -137,7 +151,7 @@ describe("AutonomyWorker", () => {
 
 		await expect(worker.runOnce()).rejects.toThrow("persistence receipt");
 		expect((await journal.list())[0]).toMatchObject({
-			status: "queued",
+			status: "uncertain",
 			lastError: "Executor returned an invalid persistence receipt",
 		});
 	});
@@ -172,6 +186,80 @@ describe("AutonomyWorker", () => {
 		await worker.close();
 		await expect(running).rejects.toThrow("aborted");
 		expect(closed).toBe(true);
+	});
+
+	test("renews leases while execution is active", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pantheon-agentd-heartbeat-"));
+		roots.push(root);
+		const journal = new CommandJournal(root, {
+			expectedRunId: "run-1",
+			expectedCwd: "/tmp/project",
+		});
+		await journal.enqueue(command());
+		const executor: CommandExecutor = {
+			async execute() {
+				await Bun.sleep(90);
+				return {
+					sessionId: "session-1",
+					persistedAt: new Date().toISOString(),
+				};
+			},
+			async close() {},
+		};
+		const worker = new AutonomyWorker(journal, executor, {
+			workerId: "worker-a",
+			leaseMs: 30,
+		});
+		const running = worker.runOnce();
+		await Bun.sleep(60);
+
+		expect(await journal.claimNext("worker-b", 30)).toBeNull();
+		await running;
+		expect((await journal.list())[0]?.status).toBe("acknowledged");
+	});
+
+	test("bounds retries and marks completed-but-unacknowledged work uncertain", async () => {
+		const failedFixture = await createJournal();
+		await failedFixture.journal.enqueue({
+			...command("failed-command"),
+			maxAttempts: 1,
+		});
+		const failingWorker = new AutonomyWorker(
+			failedFixture.journal,
+			{
+				async execute() {
+					throw new Error("boom");
+				},
+				async close() {},
+			},
+			{ workerId: "worker-a", leaseMs: 5_000 },
+		);
+		await expect(failingWorker.runOnce()).rejects.toThrow("boom");
+		expect((await failedFixture.journal.list())[0]?.status).toBe("failed");
+		expect(
+			await failedFixture.journal.claimNext("worker-b", 5_000),
+		).toBeNull();
+
+		const uncertainFixture = await createJournal();
+		await uncertainFixture.journal.enqueue(command("uncertain-command"));
+		const uncertainWorker = new AutonomyWorker(
+			uncertainFixture.journal,
+			{
+				async execute() {
+					uncertainFixture.setNow("2026-08-11T12:01:00.000Z");
+					return {
+						sessionId: "session-1",
+						persistedAt: "2026-08-11T12:01:00.000Z",
+					};
+				},
+				async close() {},
+			},
+			{ workerId: "worker-a", leaseMs: 5_000 },
+		);
+		await expect(uncertainWorker.runOnce()).rejects.toThrow("Lease expired");
+		expect((await uncertainFixture.journal.list())[0]?.status).toBe(
+			"uncertain",
+		);
 	});
 });
 
@@ -241,25 +329,33 @@ describe("OMP session and broker adapters", () => {
 			executable: "/usr/bin/bun",
 		});
 
-		await agentd.start();
-		expect(await agentd.status()).toEqual({
+		await agentd.start("run-1");
+		expect(await agentd.status("run-1")).toEqual({
 			state: "ready",
 			pid: 42,
 			restartCount: 0,
 		});
-		await agentd.stop();
-		expect(operations).toEqual([
+		await agentd.stop("run-1");
+		const start = operations[0] as {
+			spec: { name: string; args: string[] };
+		};
+		expect(start).toEqual(
 			expect.objectContaining({
 				op: "start",
 				spec: expect.objectContaining({
-					name: "pantheon-agentd",
+					name: expect.stringMatching(/^pantheon-agentd-/),
 					restart: "on-failure",
 					persist: true,
 					ready: expect.objectContaining({ log: "pantheon-agentd ready" }),
 				}),
 			}),
-			{ op: "describe", name: "pantheon-agentd" },
-			{ op: "stop", name: "pantheon-agentd", timeoutMs: 5_000 },
+		);
+		expect(start.spec.args).toEqual(
+			expect.arrayContaining(["--run-id", "run-1", "--state-root"]),
+		);
+		expect(operations.slice(1)).toEqual([
+			{ op: "describe", name: start.spec.name },
+			{ op: "stop", name: start.spec.name, timeoutMs: 5_000 },
 		]);
 	});
 });

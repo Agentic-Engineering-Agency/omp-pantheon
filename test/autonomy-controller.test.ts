@@ -28,6 +28,7 @@ async function startRun(controller: AutonomyController, maxAttempts = 3) {
 	return controller.start({
 		task: "Ship verified autonomy",
 		maxAttempts,
+		verificationCommand: "bun test",
 		gates: [
 			{ id: "native-goal", label: "OMP native goal" },
 			{ id: "verification", label: "Targeted verification" },
@@ -79,10 +80,15 @@ describe("AutonomyController", () => {
 	test("requires every gate to pass for the current attempt and artifact", async () => {
 		const { controller } = await createHarness();
 		await startRun(controller);
+		await controller.bindNativeGoal({
+			id: "goal-1",
+			objective: "Ship verified autonomy",
+		});
 		await controller.recordGate({
 			gateId: "native-goal",
 			status: "pass",
 			evidence: "goal:goal-1:complete",
+			reporter: "native-goal-event",
 			attempt: 1,
 			artifactRevision: 0,
 		});
@@ -96,6 +102,7 @@ describe("AutonomyController", () => {
 			gateId: "verification",
 			status: "pass",
 			evidence: "command:bun-test:exit-0",
+			reporter: "host-verifier",
 			attempt: 1,
 			artifactRevision: 0,
 		});
@@ -111,11 +118,19 @@ describe("AutonomyController", () => {
 	test("invalidates stale evidence when artifacts change", async () => {
 		const { controller } = await createHarness();
 		await startRun(controller);
+		await controller.bindNativeGoal({
+			id: "goal-1",
+			objective: "Ship verified autonomy",
+		});
 		for (const gateId of ["native-goal", "verification"]) {
 			await controller.recordGate({
 				gateId,
 				status: "pass",
 				evidence: `${gateId}:pass`,
+				reporter:
+					gateId === "native-goal"
+						? "native-goal-event"
+						: "host-verifier",
 				attempt: 1,
 				artifactRevision: 0,
 			});
@@ -133,6 +148,7 @@ describe("AutonomyController", () => {
 				gateId: "verification",
 				status: "pass",
 				evidence: "stale",
+				reporter: "host-verifier",
 				attempt: 1,
 				artifactRevision: 0,
 			}),
@@ -154,11 +170,19 @@ describe("AutonomyController", () => {
 	test("starts a fresh run after terminal completion without breaking journal continuity", async () => {
 		const { controller, root, store } = await createHarness();
 		await startRun(controller);
+		await controller.bindNativeGoal({
+			id: "goal-1",
+			objective: "Ship verified autonomy",
+		});
 		for (const gateId of ["native-goal", "verification"]) {
 			await controller.recordGate({
 				gateId,
 				status: "pass",
 				evidence: `${gateId}:pass`,
+				reporter:
+					gateId === "native-goal"
+						? "native-goal-event"
+						: "host-verifier",
 				attempt: 1,
 				artifactRevision: 0,
 			});
@@ -172,13 +196,14 @@ describe("AutonomyController", () => {
 		const started = await replacement.start({
 			task: "Ship the next verified goal",
 			maxAttempts: 2,
+			verificationCommand: "bun test",
 			gates: [{ id: "verification", label: "Targeted verification" }],
 		});
 
 		expect(started).toMatchObject({
 			id: "run-2",
 			status: "running",
-			revision: 5,
+			revision: 6,
 		});
 		const events = (
 			await readFile(join(root, ".pi", "autonomy", "events.jsonl"), "utf8")
@@ -189,8 +214,9 @@ describe("AutonomyController", () => {
 				(line) =>
 					JSON.parse(line) as { sequence: number; state: { id: string } },
 			);
-		expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5]);
+		expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
 		expect(events.map((event) => event.state.id)).toEqual([
+			"run-1",
 			"run-1",
 			"run-1",
 			"run-1",
@@ -224,5 +250,35 @@ describe("AutonomyStore", () => {
 		);
 
 		await expect(store.load()).rejects.toThrow("journal");
+	});
+
+	test("rejects stale concurrent saves without corrupting journal continuity", async () => {
+		const { controller, store } = await createHarness();
+		const started = await startRun(controller);
+		const paused = {
+			...started,
+			status: "paused" as const,
+			revision: 2,
+			updatedAt: "2026-08-11T12:00:01.000Z",
+		};
+		const cancelled = {
+			...started,
+			status: "cancelled" as const,
+			revision: 2,
+			updatedAt: "2026-08-11T12:00:02.000Z",
+		};
+
+		const results = await Promise.allSettled([
+			store.save(paused, 1),
+			store.save(cancelled, 1),
+		]);
+
+		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
+			1,
+		);
+		expect(results.filter((result) => result.status === "rejected")).toHaveLength(
+			1,
+		);
+		expect((await store.load())?.revision).toBe(2);
 	});
 });

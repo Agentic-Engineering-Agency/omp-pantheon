@@ -161,34 +161,85 @@ export class AutonomyWorker {
 		if (!claimed) return false;
 		const controller = new AbortController();
 		this.#activeExecution = controller;
+		let heartbeatFailure: unknown;
+		let renewing = Promise.resolve();
+		const heartbeat = setInterval(
+			() => {
+				renewing = renewing
+					.then(() =>
+						this.journal.renewLease(
+							claimed.command.id,
+							this.options.workerId,
+							claimed.fencingToken,
+							this.options.leaseMs,
+						),
+					)
+					.then(() => undefined)
+					.catch((error: unknown) => {
+						heartbeatFailure = error;
+						controller.abort();
+					});
+			},
+			Math.max(10, Math.floor(this.options.leaseMs / 3)),
+		);
 		try {
-			const receipt = await this.executor.execute(
-				claimed.command,
-				controller.signal,
-			);
-			if (
-				receipt.sessionId.trim().length === 0 ||
-				!Number.isFinite(Date.parse(receipt.persistedAt))
-			) {
-				throw new Error("Executor returned an invalid persistence receipt");
+			let receipt: CommandPersistenceReceipt;
+			try {
+				receipt = await this.executor.execute(
+					claimed.command,
+					controller.signal,
+				);
+			} catch (error) {
+				await renewing;
+				const failure = heartbeatFailure ?? error;
+				await this.journal.release(
+					claimed.command.id,
+					this.options.workerId,
+					claimed.fencingToken,
+					failure instanceof Error ? failure.message : String(failure),
+				);
+				throw failure;
 			}
-			await this.journal.acknowledge(
-				claimed.command.id,
-				this.options.workerId,
-				claimed.fencingToken,
-				receipt,
-			);
+			await renewing;
+			const receiptError =
+				heartbeatFailure ??
+				(receipt.sessionId.trim().length === 0 ||
+				!Number.isFinite(Date.parse(receipt.persistedAt))
+					? new Error("Executor returned an invalid persistence receipt")
+					: undefined);
+			if (receiptError !== undefined) {
+				const message =
+					receiptError instanceof Error
+						? receiptError.message
+						: String(receiptError);
+				await this.journal.markUncertain(
+					claimed.command.id,
+					this.options.workerId,
+					claimed.fencingToken,
+					message,
+				);
+				throw receiptError;
+			}
+			try {
+				await this.journal.acknowledge(
+					claimed.command.id,
+					this.options.workerId,
+					claimed.fencingToken,
+					receipt,
+				);
+			} catch (error) {
+				await this.journal.markUncertain(
+					claimed.command.id,
+					this.options.workerId,
+					claimed.fencingToken,
+					`Execution completed but acknowledgement failed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				throw error;
+			}
 			return true;
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			await this.journal.release(
-				claimed.command.id,
-				this.options.workerId,
-				claimed.fencingToken,
-				message,
-			);
-			throw error;
 		} finally {
+			clearInterval(heartbeat);
+			await renewing;
 			if (this.#activeExecution === controller) {
 				this.#activeExecution = null;
 			}

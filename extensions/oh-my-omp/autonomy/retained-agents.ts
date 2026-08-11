@@ -98,12 +98,17 @@ export class RetainedAgentAdapter {
 		return structuredClone(record);
 	}
 
-	async send(handleOrId: string, message: string): Promise<string> {
+	async send(
+		handleOrId: string,
+		message: string,
+		callerSessionId: string,
+	): Promise<string> {
 		const backend = this.#requireOpenBackend();
 		await this.sweepExpired();
 		const record = this.#records.get(normalizeAgentId(handleOrId));
 		if (!record)
 			throw new RetainedAgentError(`Unknown retained agent ${handleOrId}`);
+		this.#requireOwner(record, callerSessionId);
 		if (record.state !== "active") {
 			throw new RetainedAgentError(
 				`Retained agent ${record.id} is ${record.state}`,
@@ -115,12 +120,16 @@ export class RetainedAgentAdapter {
 		return backend.send(record.id, message);
 	}
 
-	async release(handleOrId: string): Promise<RetainedAgentRecord> {
+	async release(
+		handleOrId: string,
+		callerSessionId: string,
+	): Promise<RetainedAgentRecord> {
 		this.#requireOpenBackend();
 		const id = normalizeAgentId(handleOrId);
 		const record = this.#records.get(id);
 		if (!record)
 			throw new RetainedAgentError(`Unknown retained agent ${handleOrId}`);
+		this.#requireOwner(record, callerSessionId);
 		await this.#releaseRecord(record, "released");
 		return structuredClone(record);
 	}
@@ -149,8 +158,10 @@ export class RetainedAgentAdapter {
 		return expired.length;
 	}
 
-	list(): RetainedAgentRecord[] {
-		return [...this.#records.values()].map((record) => structuredClone(record));
+	list(callerSessionId: string): RetainedAgentRecord[] {
+		return [...this.#records.values()]
+			.filter((record) => record.ownerSessionId === callerSessionId)
+			.map((record) => structuredClone(record));
 	}
 
 	async close(): Promise<void> {
@@ -171,6 +182,20 @@ export class RetainedAgentAdapter {
 		if (record.state !== "active") return;
 		await this.backend?.release(record.id);
 		record.state = state;
+	}
+
+	#requireOwner(
+		record: RetainedAgentRecord,
+		callerSessionId: string,
+	): void {
+		if (
+			callerSessionId.trim().length === 0 ||
+			record.ownerSessionId !== callerSessionId
+		) {
+			throw new RetainedAgentError(
+				`Retained agent ${record.id} is owned by another session`,
+			);
+		}
 	}
 
 	#requireOpenBackend(): RetainedAgentBackend {

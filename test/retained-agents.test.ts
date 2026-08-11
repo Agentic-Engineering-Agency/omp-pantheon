@@ -73,8 +73,12 @@ describe("RetainedAgentAdapter", () => {
 		const first = await adapter.retain("First", "session-owner", 5_000);
 		const second = await adapter.retain("Second", "session-owner", 5_000);
 
-		expect(await adapter.send(first.handle, "continue")).toBe("reply:continue");
-		expect(await adapter.send(second.id, "status")).toBe("reply:status");
+		expect(
+			await adapter.send(first.handle, "continue", "session-owner"),
+		).toBe("reply:continue");
+		expect(await adapter.send(second.id, "status", "session-owner")).toBe(
+			"reply:status",
+		);
 		expect(calls).toContain("send:agent-1:continue");
 		expect(calls).toContain("send:agent-2:status");
 	});
@@ -89,7 +93,9 @@ describe("RetainedAgentAdapter", () => {
 		now += 1_001;
 
 		expect(await adapter.sweepExpired()).toBe(1);
-		await expect(adapter.send(retained.id, "late")).rejects.toThrow("expired");
+		await expect(
+			adapter.send(retained.id, "late", "session-owner"),
+		).rejects.toThrow("expired");
 		expect(calls).toContain("release:agent-1");
 	});
 
@@ -101,13 +107,28 @@ describe("RetainedAgentAdapter", () => {
 		const other = await adapter.retain("B1", "owner-b", 5_000);
 
 		expect(await adapter.cleanupOwner("owner-a")).toBe(2);
-		expect(await adapter.send(other.id, "still alive")).toBe(
+		expect(await adapter.send(other.id, "still alive", "owner-b")).toBe(
 			"reply:still alive",
 		);
 		expect(calls.filter((call) => call.startsWith("release:"))).toEqual([
 			"release:agent-1",
 			"release:agent-2",
 		]);
+	});
+
+	test("rejects cross-session send, release, and list access", async () => {
+		const { implementation } = backend();
+		const adapter = new RetainedAgentAdapter(implementation);
+		const retained = await adapter.retain("Owned", "owner-a", 5_000);
+
+		await expect(
+			adapter.send(retained.id, "steal", "owner-b"),
+		).rejects.toThrow("another session");
+		await expect(
+			adapter.release(retained.id, "owner-b"),
+		).rejects.toThrow("another session");
+		expect(adapter.list("owner-b")).toEqual([]);
+		expect(adapter.list("owner-a")).toHaveLength(1);
 	});
 
 	test("releases every retained agent on shutdown", async () => {

@@ -50,6 +50,11 @@ export class AutonomyController {
 				"Autonomy maxAttempts must be a positive integer",
 			);
 		}
+		if (args.verificationCommand.trim().length === 0) {
+			throw new AutonomyTransitionError(
+				"Autonomy verification command must not be empty",
+			);
+		}
 		if (args.gates.length === 0) {
 			throw new AutonomyTransitionError(
 				"Autonomy requires at least one completion gate",
@@ -83,6 +88,7 @@ export class AutonomyController {
 			revision: (existing?.revision ?? 0) + 1,
 			attempt: 1,
 			maxAttempts: args.maxAttempts,
+			verificationCommand: args.verificationCommand.trim(),
 			artifactRevision: 0,
 			gates: args.gates.map((gate) => ({
 				...gate,
@@ -93,8 +99,31 @@ export class AutonomyController {
 			createdAt: timestamp,
 			updatedAt: timestamp,
 		};
-		await this.store.save(state);
+		await this.store.save(state, existing?.revision ?? 0);
 		return state;
+	}
+
+	async bindNativeGoal(goal: {
+		id: string;
+		objective: string;
+	}): Promise<AutonomyRun> {
+		const state = await this.requireMutable("bind a native goal");
+		if (goal.id.trim().length === 0 || goal.objective.trim() !== state.task) {
+			throw new AutonomyTransitionError(
+				"Native goal must have an ID and exactly match the autonomy objective",
+			);
+		}
+		if (state.nativeGoalId !== undefined) {
+			if (state.nativeGoalId === goal.id) return state;
+			throw new AutonomyTransitionError(
+				`Autonomy run is already bound to native goal ${state.nativeGoalId}`,
+			);
+		}
+		return this.persist({
+			...state,
+			nativeGoalId: goal.id,
+			updatedAt: this.now(),
+		});
 	}
 
 	async recordGate(args: RecordAutonomyGateArgs): Promise<AutonomyRun> {
@@ -118,6 +147,18 @@ export class AutonomyController {
 				`Unknown autonomy gate: ${args.gateId}`,
 			);
 		}
+		const expectedReporter =
+			args.gateId === "native-goal" ? "native-goal-event" : "host-verifier";
+		if (args.reporter !== expectedReporter) {
+			throw new AutonomyTransitionError(
+				`Autonomy gate ${args.gateId} requires reporter ${expectedReporter}`,
+			);
+		}
+		if (args.gateId === "native-goal" && state.nativeGoalId === undefined) {
+			throw new AutonomyTransitionError(
+				"Autonomy native goal gate is not bound to this run",
+			);
+		}
 
 		const timestamp = this.now();
 		const gates = state.gates.map((gate, index): AutonomyGateRecord => {
@@ -126,6 +167,7 @@ export class AutonomyController {
 				...gate,
 				status: args.status,
 				evidence: args.evidence.trim(),
+				reporter: args.reporter,
 				attempt: args.attempt,
 				artifactRevision: args.artifactRevision,
 				updatedAt: timestamp,
@@ -270,7 +312,7 @@ export class AutonomyController {
 
 	private async persist(state: AutonomyRun): Promise<AutonomyRun> {
 		const next = { ...state, revision: state.revision + 1 };
-		await this.store.save(next);
+		await this.store.save(next, state.revision);
 		return next;
 	}
 }

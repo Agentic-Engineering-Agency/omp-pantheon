@@ -8,6 +8,8 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { acquireFileLock } from "../file-lock";
+
 import type { AutonomyJournalEvent, AutonomyRun } from "./types";
 
 const STATE_DIRECTORY = join(".pi", "autonomy");
@@ -24,10 +26,12 @@ export class AutonomyStoreError extends Error {
 export class AutonomyStore {
 	readonly statePath: string;
 	readonly journalPath: string;
+	readonly lockPath: string;
 
 	constructor(private readonly root: string) {
 		this.statePath = join(root, STATE_DIRECTORY, STATE_FILE);
 		this.journalPath = join(root, STATE_DIRECTORY, JOURNAL_FILE);
+		this.lockPath = `${this.statePath}.lock`;
 	}
 
 	async load(): Promise<AutonomyRun | null> {
@@ -58,33 +62,54 @@ export class AutonomyStore {
 		return latest.revision >= snapshotState.revision ? latest : snapshotState;
 	}
 
-	async save(state: AutonomyRun): Promise<void> {
+	async save(state: AutonomyRun, expectedRevision: number): Promise<void> {
 		this.assertState(state, "state");
+		if (
+			!Number.isInteger(expectedRevision) ||
+			expectedRevision < 0 ||
+			state.revision !== expectedRevision + 1
+		) {
+			throw new AutonomyStoreError(
+				"Autonomy save requires the immediately preceding revision",
+			);
+		}
 		const directory = dirname(this.statePath);
-		await mkdir(directory, { recursive: true });
+		await mkdir(directory, { recursive: true, mode: 0o700 });
+		const release = await acquireFileLock(this.lockPath);
+		try {
+			const current = await this.load();
+			const currentRevision = current?.revision ?? 0;
+			if (currentRevision !== expectedRevision) {
+				throw new AutonomyStoreError(
+					`Autonomy revision conflict: expected ${expectedRevision}, found ${currentRevision}`,
+				);
+			}
 
-		const eventWithoutChecksum = {
-			schemaVersion: 1 as const,
-			sequence: state.revision,
-			at: state.updatedAt,
-			state,
-		};
-		const checksum = createHash("sha256")
-			.update(JSON.stringify(eventWithoutChecksum))
-			.digest("hex");
-		const event: AutonomyJournalEvent = {
-			...eventWithoutChecksum,
-			checksum,
-		};
-		await appendFile(this.journalPath, `${JSON.stringify(event)}\n`, "utf8");
+			const eventWithoutChecksum = {
+				schemaVersion: 1 as const,
+				sequence: state.revision,
+				at: state.updatedAt,
+				state,
+			};
+			const checksum = createHash("sha256")
+				.update(JSON.stringify(eventWithoutChecksum))
+				.digest("hex");
+			const event: AutonomyJournalEvent = {
+				...eventWithoutChecksum,
+				checksum,
+			};
+			await appendFile(this.journalPath, `${JSON.stringify(event)}\n`, "utf8");
 
-		const temporaryPath = `${this.statePath}.${randomUUID()}.tmp`;
-		await writeFile(
-			temporaryPath,
-			`${JSON.stringify(state, null, 2)}\n`,
-			"utf8",
-		);
-		await rename(temporaryPath, this.statePath);
+			const temporaryPath = `${this.statePath}.${randomUUID()}.tmp`;
+			await writeFile(
+				temporaryPath,
+				`${JSON.stringify(state, null, 2)}\n`,
+				"utf8",
+			);
+			await rename(temporaryPath, this.statePath);
+		} finally {
+			await release();
+		}
 	}
 
 	private async readOptional(path: string): Promise<string | null> {
@@ -157,7 +182,9 @@ export class AutonomyStore {
 			state.revision < 1 ||
 			!Number.isInteger(state.attempt) ||
 			state.attempt < 1 ||
-			!Array.isArray(state.gates)
+			!Array.isArray(state.gates) ||
+			typeof state.verificationCommand !== "string" ||
+			state.verificationCommand.trim().length === 0
 		) {
 			throw new AutonomyStoreError(`Autonomy ${source} has an invalid shape`);
 		}

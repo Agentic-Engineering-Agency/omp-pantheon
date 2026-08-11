@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 
 import type { CommandJournal, WorkerCommand } from "./journal";
 
-const SCHEDULER_DIRECTORY = join(".pi", "autonomy", "scheduler");
+const SCHEDULER_DIRECTORY = "scheduler";
 const MANIFEST_FILE = "manifest.json";
 const GENERATIONS_DIRECTORY = "generations";
 const SNAPSHOT_FILE = "snapshot.json";

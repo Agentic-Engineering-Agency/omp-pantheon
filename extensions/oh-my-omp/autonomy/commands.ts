@@ -6,11 +6,18 @@ interface ParsedAutonomyCommand {
 	action: "start" | "status" | "pause" | "resume" | "cancel" | "explain";
 	task?: string;
 	maxAttempts?: number;
+	verificationCommand?: string;
 }
 
 function parseAutonomyCommand(raw: string): ParsedAutonomyCommand | null {
+	const verificationMatch = raw.match(/--verify=(?:"([^"]+)"|(\S+))/);
+	const verificationCommand =
+		verificationMatch?.[1] ?? verificationMatch?.[2];
+	const commandWithoutVerification = verificationMatch
+		? raw.replace(verificationMatch[0], "")
+		: raw;
 	const tokens: string[] = [];
-	const trimmed = raw.trim();
+	const trimmed = commandWithoutVerification.trim();
 	const matcher = /"([^"]*)"|(\S+)/g;
 	for (
 		let match = matcher.exec(trimmed);
@@ -34,6 +41,7 @@ function parseAutonomyCommand(raw: string): ParsedAutonomyCommand | null {
 	};
 	if (action !== "start") return parsed;
 
+	parsed.verificationCommand = verificationCommand?.trim();
 	const taskParts: string[] = [];
 	for (const token of tokens) {
 		if (token.startsWith("--max-attempts=")) {
@@ -61,7 +69,7 @@ export function registerAutonomyCommands(
 			const parsed = parseAutonomyCommand(rawArgs);
 			if (parsed === null) {
 				ctx.ui.notify(
-					"Usage: /autonomy start <task> [--max-attempts=N] | status | pause | resume | cancel | explain",
+					'Usage: /autonomy start <task> [--max-attempts=N] [--verify="command"] | status | pause | resume | cancel | explain',
 					"error",
 				);
 				return;
@@ -76,14 +84,15 @@ export function registerAutonomyCommands(
 						const state = await runtime.start(
 							parsed.task,
 							parsed.maxAttempts ?? 25,
+							parsed.verificationCommand ?? "bun test",
 						);
 						pi.sendUserMessage(
 							[
 								"<system-reminder>",
 								`Verified autonomy started for: ${state.task}`,
-								"Create and maintain a native OMP goal for this objective.",
-								"Completion requires the native-goal and verification gates to pass for the same attempt and artifact revision.",
-								"Record concrete verification with the autonomy_gate tool. Agent prose and completion promises are ignored.",
+								"Create a native OMP goal with exactly this objective; Pantheon binds its ID before accepting completion.",
+								`Completion also requires the host to run: ${state.verificationCommand}`,
+								"Invoke autonomy_gate to run that fixed command. Agent prose and self-attested evidence are ignored.",
 								"</system-reminder>",
 							].join("\n"),
 						);

@@ -1,28 +1,20 @@
-import { createHash, randomUUID } from "node:crypto";
-import {
-	appendFile,
-	mkdir,
-	readFile,
-	rename,
-	rm,
-	stat,
-	writeFile,
-} from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
-const JOURNAL_DIRECTORY = join(".pi", "autonomy");
+import { acquireFileLock } from "../file-lock";
+
 const JOURNAL_FILE = "commands.jsonl";
-const LOCK_DIRECTORY = "commands.lock";
-const LOCK_STALE_MS = 30_000;
-const LOCK_RETRY_MS = 10;
-const LOCK_TIMEOUT_MS = 5_000;
+const LOCK_FILE = "commands.lock";
 
 export interface WorkerCommand {
 	schemaVersion: 1;
 	id: string;
+	runId: string;
 	cwd: string;
 	sessionFile: string;
 	prompt: string;
+	maxAttempts: number;
 	createdAt: string;
 }
 
@@ -32,7 +24,12 @@ export interface CommandPersistenceReceipt {
 	persistedAt: string;
 }
 
-export type CommandStatus = "queued" | "claimed" | "acknowledged";
+export type CommandStatus =
+	| "queued"
+	| "claimed"
+	| "acknowledged"
+	| "failed"
+	| "uncertain";
 
 export interface CommandRecord {
 	command: WorkerCommand;
@@ -43,10 +40,19 @@ export interface CommandRecord {
 	leaseUntil?: string;
 	acknowledgedAt?: string;
 	lastError?: string;
+	failedAt?: string;
+	uncertainAt?: string;
 	receipt?: CommandPersistenceReceipt;
 }
 
-type CommandEventType = "enqueued" | "claimed" | "acknowledged" | "released";
+type CommandEventType =
+	| "enqueued"
+	| "claimed"
+	| "renewed"
+	| "acknowledged"
+	| "released"
+	| "failed"
+	| "uncertain";
 
 interface CommandJournalEvent {
 	schemaVersion: 1;
@@ -65,6 +71,8 @@ interface CommandJournalEvent {
 
 interface CommandJournalOptions {
 	now?: () => number;
+	expectedRunId?: string;
+	expectedCwd?: string;
 }
 
 export class CommandJournalError extends Error {
@@ -78,11 +86,16 @@ export class CommandJournal {
 	readonly path: string;
 	readonly #lockPath: string;
 	readonly #now: () => number;
+	readonly #expectedRunId?: string;
+	readonly #expectedCwd?: string;
 
 	constructor(root: string, options: CommandJournalOptions = {}) {
-		this.path = join(root, JOURNAL_DIRECTORY, JOURNAL_FILE);
-		this.#lockPath = join(root, JOURNAL_DIRECTORY, LOCK_DIRECTORY);
+		this.path = join(root, JOURNAL_FILE);
+		this.#lockPath = join(root, LOCK_FILE);
 		this.#now = options.now ?? Date.now;
+		this.#expectedRunId = options.expectedRunId;
+		this.#expectedCwd =
+			options.expectedCwd === undefined ? undefined : resolve(options.expectedCwd);
 	}
 
 	async enqueue(command: WorkerCommand): Promise<CommandRecord> {
@@ -162,6 +175,38 @@ export class CommandJournal {
 		});
 	}
 
+	async renewLease(
+		commandId: string,
+		workerId: string,
+		fencingToken: number,
+		leaseMs: number,
+	): Promise<CommandRecord> {
+		if (!Number.isInteger(leaseMs) || leaseMs <= 0) {
+			throw new CommandJournalError(
+				"Lease duration must be a positive integer",
+			);
+		}
+		return this.#mutate(async (records, sequence) => {
+			const record = this.#requireActiveClaim(
+				records,
+				commandId,
+				workerId,
+				fencingToken,
+			);
+			const leaseUntil = new Date(this.#now() + leaseMs).toISOString();
+			await this.#append({
+				sequence,
+				at: this.#isoNow(),
+				type: "renewed",
+				commandId,
+				workerId,
+				fencingToken,
+				leaseUntil,
+			});
+			return { ...record, leaseUntil };
+		});
+	}
+
 	async acknowledge(
 		commandId: string,
 		workerId: string,
@@ -202,6 +247,9 @@ export class CommandJournal {
 		fencingToken: number,
 		error: string,
 	): Promise<CommandRecord> {
+		if (error.trim().length === 0) {
+			throw new CommandJournalError("Command failure evidence must not be empty");
+		}
 		return this.#mutate(async (records, sequence) => {
 			const record = this.#requireClaim(
 				records,
@@ -209,21 +257,61 @@ export class CommandJournal {
 				workerId,
 				fencingToken,
 			);
+			const failed = record.attempts >= record.command.maxAttempts;
+			const at = this.#isoNow();
 			await this.#append({
 				sequence,
-				at: this.#isoNow(),
-				type: "released",
+				at,
+				type: failed ? "failed" : "released",
 				commandId,
 				workerId,
 				fencingToken,
-				error,
+				error: error.trim(),
 			});
 			return {
 				...record,
-				status: "queued",
+				status: failed ? "failed" : "queued",
 				workerId: undefined,
 				leaseUntil: undefined,
-				lastError: error,
+				lastError: error.trim(),
+				failedAt: failed ? at : undefined,
+			};
+		});
+	}
+
+	async markUncertain(
+		commandId: string,
+		workerId: string,
+		fencingToken: number,
+		error: string,
+	): Promise<CommandRecord> {
+		if (error.trim().length === 0) {
+			throw new CommandJournalError("Uncertain outcome evidence must not be empty");
+		}
+		return this.#mutate(async (records, sequence) => {
+			const record = this.#requireClaim(
+				records,
+				commandId,
+				workerId,
+				fencingToken,
+			);
+			const uncertainAt = this.#isoNow();
+			await this.#append({
+				sequence,
+				at: uncertainAt,
+				type: "uncertain",
+				commandId,
+				workerId,
+				fencingToken,
+				error: error.trim(),
+			});
+			return {
+				...record,
+				status: "uncertain",
+				workerId: undefined,
+				leaseUntil: undefined,
+				lastError: error.trim(),
+				uncertainAt,
 			};
 		});
 	}
@@ -294,7 +382,8 @@ export class CommandJournal {
 			if (
 				!event.workerId ||
 				!event.leaseUntil ||
-				event.fencingToken !== record.fencingToken + 1
+				event.fencingToken !== record.fencingToken + 1 ||
+				(record.status !== "queued" && record.status !== "claimed")
 			) {
 				throw new CommandJournalError(
 					`Invalid claim event for command ${event.commandId}`,
@@ -311,12 +400,32 @@ export class CommandJournal {
 			return;
 		}
 		this.#assertEventClaim(record, event);
-		if (event.type === "released") {
+		if (event.type === "renewed") {
+			if (!event.leaseUntil) {
+				throw new CommandJournalError(
+					`Lease renewal for command ${event.commandId} lacks a deadline`,
+				);
+			}
+			record.leaseUntil = event.leaseUntil;
+			return;
+		}
+		if (event.type === "released" || event.type === "failed") {
 			Object.assign(record, {
-				status: "queued",
+				status: event.type === "failed" ? "failed" : "queued",
 				workerId: undefined,
 				leaseUntil: undefined,
 				lastError: event.error,
+				failedAt: event.type === "failed" ? event.at : undefined,
+			});
+			return;
+		}
+		if (event.type === "uncertain") {
+			Object.assign(record, {
+				status: "uncertain",
+				workerId: undefined,
+				leaseUntil: undefined,
+				lastError: event.error,
+				uncertainAt: event.at,
 			});
 			return;
 		}
@@ -328,6 +437,7 @@ export class CommandJournal {
 		this.#assertReceipt(event.receipt);
 		Object.assign(record, {
 			status: "acknowledged",
+			workerId: undefined,
 			leaseUntil: undefined,
 			acknowledgedAt: event.at,
 			receipt: event.receipt,
@@ -430,10 +540,17 @@ export class CommandJournal {
 		if (
 			command.schemaVersion !== 1 ||
 			command.id.trim().length === 0 ||
-			command.cwd.trim().length === 0 ||
-			command.sessionFile.trim().length === 0 ||
+			command.runId.trim().length === 0 ||
+			!isAbsolute(command.cwd) ||
+			!isAbsolute(command.sessionFile) ||
 			command.prompt.trim().length === 0 ||
-			!Number.isFinite(Date.parse(command.createdAt))
+			!Number.isInteger(command.maxAttempts) ||
+			command.maxAttempts <= 0 ||
+			!Number.isFinite(Date.parse(command.createdAt)) ||
+			(this.#expectedRunId !== undefined &&
+				command.runId !== this.#expectedRunId) ||
+			(this.#expectedCwd !== undefined &&
+				resolve(command.cwd) !== this.#expectedCwd)
 		) {
 			throw new CommandJournalError("Worker command has an invalid shape");
 		}
@@ -462,38 +579,7 @@ export class CommandJournal {
 	}
 
 	async #acquireLock(): Promise<() => Promise<void>> {
-		await mkdir(dirname(this.#lockPath), { recursive: true });
-		const startedAt = Date.now();
-		while (Date.now() - startedAt < LOCK_TIMEOUT_MS) {
-			try {
-				await mkdir(this.#lockPath);
-				await writeFile(
-					join(this.#lockPath, "owner.json"),
-					JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
-					"utf8",
-				);
-				return async () => rm(this.#lockPath, { recursive: true, force: true });
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-				if (await this.#breakStaleLock()) continue;
-				await Bun.sleep(LOCK_RETRY_MS);
-			}
-		}
-		throw new CommandJournalError("Timed out acquiring command journal lock");
-	}
-
-	async #breakStaleLock(): Promise<boolean> {
-		try {
-			const lockStat = await stat(this.#lockPath);
-			if (Date.now() - lockStat.mtimeMs <= LOCK_STALE_MS) return false;
-			const stalePath = `${this.#lockPath}.stale-${randomUUID()}`;
-			await rename(this.#lockPath, stalePath);
-			await rm(stalePath, { recursive: true, force: true });
-			return true;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
-			if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-			throw error;
-		}
+		await mkdir(dirname(this.#lockPath), { recursive: true, mode: 0o700 });
+		return acquireFileLock(this.#lockPath);
 	}
 }

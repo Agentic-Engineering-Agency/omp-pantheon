@@ -32,9 +32,19 @@ interface FakeContext {
 type EventHandler = (event: never, ctx: FakeContext) => Promise<void> | void;
 
 const roots: string[] = [];
+const registerTestAutonomy = (pi: never): unknown =>
+	registerAutonomy(pi, {
+		async verify(_cwd, command) {
+			return {
+				status: "pass",
+				evidence: `command:${command}:exit:0`,
+			};
+		},
+	});
+
 
 async function createFakeExtension(
-	register: (pi: never) => unknown | Promise<unknown> = registerAutonomy,
+	register: (pi: never) => unknown | Promise<unknown> = registerTestAutonomy,
 ) {
 	const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-extension-"));
 	roots.push(cwd);
@@ -135,16 +145,18 @@ describe("autonomy extension", () => {
 		await commands.autonomy?.handler('start "Ship" --max-attempts=2', ctx);
 
 		await handlers.goal_updated?.[0]?.(
-			{ goal: { id: "goal-1", status: "complete" } } as never,
+			{ goal: { id: "goal-1", objective: "Ship", status: "active" } } as never,
+			ctx,
+		);
+		await handlers.goal_updated?.[0]?.(
+			{
+				goal: { id: "goal-1", objective: "Ship", status: "complete" },
+			} as never,
 			ctx,
 		);
 		const result = await tools.autonomy_gate?.execute(
 			"tool-1",
-			{
-				gateId: "verification",
-				status: "pass",
-				evidence: "bun test: 319 pass",
-			},
+			{},
 			new AbortController().signal,
 			undefined,
 			ctx,
@@ -156,6 +168,62 @@ describe("autonomy extension", () => {
 		expect(logs).toContain(
 			"Autonomy run succeeded after objective gates passed",
 		);
+	});
+
+	test("binds the native gate to the matching active goal and ignores unrelated completion", async () => {
+		const { commands, ctx, handlers, logs, messages, tools } =
+			await createFakeExtension();
+		await commands.autonomy?.handler('start "Ship A" --max-attempts=2', ctx);
+
+		await handlers.goal_updated?.[0]?.(
+			{
+				goal: { id: "goal-a", objective: "Ship A", status: "active" },
+			} as never,
+			ctx,
+		);
+		await handlers.goal_updated?.[0]?.(
+			{
+				goal: { id: "goal-b", objective: "Unrelated", status: "complete" },
+			} as never,
+			ctx,
+		);
+		await tools.autonomy_gate?.execute(
+			"tool-1",
+			{},
+			undefined,
+			undefined,
+			ctx,
+		);
+		await handlers.agent_end?.[0]?.({ messages: [] } as never, ctx);
+
+		expect(logs).not.toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+		expect(messages.at(-1)).toContain("native-goal");
+	});
+
+	test("does not let model-facing tool parameters attest the native goal gate", async () => {
+		const { commands, ctx, handlers, logs, messages, tools } =
+			await createFakeExtension();
+		await commands.autonomy?.handler('start "Ship" --max-attempts=2', ctx);
+
+		await tools.autonomy_gate?.execute(
+			"tool-1",
+			{
+				gateId: "native-goal",
+				status: "pass",
+				evidence: "self-attested",
+			},
+			undefined,
+			undefined,
+			ctx,
+		);
+		await handlers.agent_end?.[0]?.({ messages: [] } as never, ctx);
+
+		expect(logs).not.toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+		expect(messages.at(-1)).toContain("native-goal");
 	});
 
 	test("ignores completion promises and continues with missing gates", async () => {
