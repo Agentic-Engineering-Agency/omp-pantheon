@@ -29,7 +29,11 @@ export interface VerificationReceipt {
 }
 
 export interface VerificationRunner {
-	verify(cwd: string, command: string, signal?: AbortSignal): Promise<VerificationReceipt>;
+	verify(
+		cwd: string,
+		command: string,
+		signal?: AbortSignal,
+	): Promise<VerificationReceipt>;
 }
 
 const defaultVerificationRunner: VerificationRunner = {
@@ -262,7 +266,9 @@ export function registerAutonomy(
 		async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
 			await runtime.attach(ctx);
 			const state = await runtime.runVerification(signal);
-			const gate = state.gates.find((candidate) => candidate.id === "verification");
+			const gate = state.gates.find(
+				(candidate) => candidate.id === "verification",
+			);
 			return {
 				content: [
 					{

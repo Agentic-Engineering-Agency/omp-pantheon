@@ -108,7 +108,10 @@ export class AutonomyAgentd {
 	}
 
 	#daemonName(runId: string): string {
-		const suffix = createHash("sha256").update(runId).digest("hex").slice(0, 12);
+		const suffix = createHash("sha256")
+			.update(runId)
+			.digest("hex")
+			.slice(0, 12);
 		return `${DAEMON_NAME_PREFIX}-${suffix}`;
 	}
 
@@ -173,7 +176,9 @@ async function runAgentd(args: string[]): Promise<void> {
 	const stateRoot = resolve(parseRequiredArgument(args, "--state-root"));
 	const expectedStateRoot = resolve(autonomyRuntimeRoot(root, runId));
 	if (stateRoot !== expectedStateRoot) {
-		throw new Error("pantheon-agentd state root does not match project and run");
+		throw new Error(
+			"pantheon-agentd state root does not match project and run",
+		);
 	}
 	scrubAgentdEnvironment();
 	const journal = new CommandJournal(stateRoot, {

@@ -236,9 +236,7 @@ describe("AutonomyWorker", () => {
 		);
 		await expect(failingWorker.runOnce()).rejects.toThrow("boom");
 		expect((await failedFixture.journal.list())[0]?.status).toBe("failed");
-		expect(
-			await failedFixture.journal.claimNext("worker-b", 5_000),
-		).toBeNull();
+		expect(await failedFixture.journal.claimNext("worker-b", 5_000)).toBeNull();
 
 		const uncertainFixture = await createJournal();
 		await uncertainFixture.journal.enqueue(command("uncertain-command"));

@@ -184,10 +184,7 @@ export class RetainedAgentAdapter {
 		record.state = state;
 	}
 
-	#requireOwner(
-		record: RetainedAgentRecord,
-		callerSessionId: string,
-	): void {
+	#requireOwner(record: RetainedAgentRecord, callerSessionId: string): void {
 		if (
 			callerSessionId.trim().length === 0 ||
 			record.ownerSessionId !== callerSessionId

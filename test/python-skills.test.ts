@@ -165,7 +165,7 @@ describe("Python skill runner", () => {
 		const root = await createRoot();
 		await writeFile(
 			join(root, "main.py"),
-			'import json, sys\njson.dump(json.load(sys.stdin), sys.stdout)\n',
+			"import json, sys\njson.dump(json.load(sys.stdin), sys.stdout)\n",
 		);
 		const runner = new PythonSkillRunner(
 			{ provision: async () => ({ pythonPath, reused: true }) },
@@ -176,11 +176,9 @@ describe("Python skill runner", () => {
 		);
 
 		await expect(
-			runner.run(
-				root,
-				validManifest({ environment: ["SECRET"] }),
-				{ message: "hello" },
-			),
+			runner.run(root, validManifest({ environment: ["SECRET"] }), {
+				message: "hello",
+			}),
 		).rejects.toThrow("not host-authorized");
 	});
 

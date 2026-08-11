@@ -29,12 +29,8 @@ describe("OMP dependency contract", () => {
 			extensionPackage.devDependencies?.["@oh-my-pi/pi-coding-agent"],
 		).toBe(expectedOmpVersion);
 		for (const lock of [rootLock, extensionLock]) {
-			expect(lock).toContain(
-				'"@oh-my-pi/pi-coding-agent": "^17.2.14"',
-			);
-			expect(lock).toContain(
-				'"@oh-my-pi/pi-coding-agent@17.2.14"',
-			);
+			expect(lock).toContain('"@oh-my-pi/pi-coding-agent": "^17.2.14"');
+			expect(lock).toContain('"@oh-my-pi/pi-coding-agent@17.2.14"');
 			expect(lock).not.toContain("@oh-my-pi/pi-coding-agent@16.0.5");
 		}
 	});

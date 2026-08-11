@@ -42,7 +42,6 @@ const registerTestAutonomy = (pi: never): unknown =>
 		},
 	});
 
-
 async function createFakeExtension(
 	register: (pi: never) => unknown | Promise<unknown> = registerTestAutonomy,
 ) {
@@ -187,13 +186,7 @@ describe("autonomy extension", () => {
 			} as never,
 			ctx,
 		);
-		await tools.autonomy_gate?.execute(
-			"tool-1",
-			{},
-			undefined,
-			undefined,
-			ctx,
-		);
+		await tools.autonomy_gate?.execute("tool-1", {}, undefined, undefined, ctx);
 		await handlers.agent_end?.[0]?.({ messages: [] } as never, ctx);
 
 		expect(logs).not.toContain(

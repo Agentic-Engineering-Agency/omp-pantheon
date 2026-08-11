@@ -5,8 +5,7 @@ import { join, resolve } from "node:path";
 export function autonomyRuntimeRoot(
 	projectRoot: string,
 	runId: string,
-	stateHome =
-		process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"),
+	stateHome = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"),
 ): string {
 	if (runId.trim().length === 0 || /[^A-Za-z0-9._-]/.test(runId)) {
 		throw new Error("Autonomy run ID contains unsafe path characters");

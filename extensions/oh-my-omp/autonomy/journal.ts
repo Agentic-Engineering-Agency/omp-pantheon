@@ -95,7 +95,9 @@ export class CommandJournal {
 		this.#now = options.now ?? Date.now;
 		this.#expectedRunId = options.expectedRunId;
 		this.#expectedCwd =
-			options.expectedCwd === undefined ? undefined : resolve(options.expectedCwd);
+			options.expectedCwd === undefined
+				? undefined
+				: resolve(options.expectedCwd);
 	}
 
 	async enqueue(command: WorkerCommand): Promise<CommandRecord> {
@@ -248,7 +250,9 @@ export class CommandJournal {
 		error: string,
 	): Promise<CommandRecord> {
 		if (error.trim().length === 0) {
-			throw new CommandJournalError("Command failure evidence must not be empty");
+			throw new CommandJournalError(
+				"Command failure evidence must not be empty",
+			);
 		}
 		return this.#mutate(async (records, sequence) => {
 			const record = this.#requireClaim(
@@ -286,7 +290,9 @@ export class CommandJournal {
 		error: string,
 	): Promise<CommandRecord> {
 		if (error.trim().length === 0) {
-			throw new CommandJournalError("Uncertain outcome evidence must not be empty");
+			throw new CommandJournalError(
+				"Uncertain outcome evidence must not be empty",
+			);
 		}
 		return this.#mutate(async (records, sequence) => {
 			const record = this.#requireClaim(

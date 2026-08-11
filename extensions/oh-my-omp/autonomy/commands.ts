@@ -11,8 +11,7 @@ interface ParsedAutonomyCommand {
 
 function parseAutonomyCommand(raw: string): ParsedAutonomyCommand | null {
 	const verificationMatch = raw.match(/--verify=(?:"([^"]+)"|(\S+))/);
-	const verificationCommand =
-		verificationMatch?.[1] ?? verificationMatch?.[2];
+	const verificationCommand = verificationMatch?.[1] ?? verificationMatch?.[2];
 	const commandWithoutVerification = verificationMatch
 		? raw.replace(verificationMatch[0], "")
 		: raw;

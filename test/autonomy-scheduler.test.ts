@@ -245,10 +245,7 @@ describe("PersistedScheduler", () => {
 		await scheduler.compact();
 
 		const manifest = JSON.parse(
-			await readFile(
-				join(root, "scheduler", "manifest.json"),
-				"utf8",
-			),
+			await readFile(join(root, "scheduler", "manifest.json"), "utf8"),
 		) as {
 			schemaVersion: number;
 			activeGeneration: number;

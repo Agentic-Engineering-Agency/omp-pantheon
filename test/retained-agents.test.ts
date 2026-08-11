@@ -73,9 +73,9 @@ describe("RetainedAgentAdapter", () => {
 		const first = await adapter.retain("First", "session-owner", 5_000);
 		const second = await adapter.retain("Second", "session-owner", 5_000);
 
-		expect(
-			await adapter.send(first.handle, "continue", "session-owner"),
-		).toBe("reply:continue");
+		expect(await adapter.send(first.handle, "continue", "session-owner")).toBe(
+			"reply:continue",
+		);
 		expect(await adapter.send(second.id, "status", "session-owner")).toBe(
 			"reply:status",
 		);
@@ -121,12 +121,12 @@ describe("RetainedAgentAdapter", () => {
 		const adapter = new RetainedAgentAdapter(implementation);
 		const retained = await adapter.retain("Owned", "owner-a", 5_000);
 
-		await expect(
-			adapter.send(retained.id, "steal", "owner-b"),
-		).rejects.toThrow("another session");
-		await expect(
-			adapter.release(retained.id, "owner-b"),
-		).rejects.toThrow("another session");
+		await expect(adapter.send(retained.id, "steal", "owner-b")).rejects.toThrow(
+			"another session",
+		);
+		await expect(adapter.release(retained.id, "owner-b")).rejects.toThrow(
+			"another session",
+		);
 		expect(adapter.list("owner-b")).toEqual([]);
 		expect(adapter.list("owner-a")).toHaveLength(1);
 	});

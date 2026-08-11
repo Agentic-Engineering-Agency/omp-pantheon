@@ -89,9 +89,7 @@ export class RefinementLedger {
 		};
 		return this.withLock(async () => {
 			const events = await this.readEvents();
-			if (
-				this.snapshot(events).some((item) => item.id === proposal.id)
-			) {
+			if (this.snapshot(events).some((item) => item.id === proposal.id)) {
 				throw new RefinementLedgerError(
 					`Refinement proposal already exists: ${proposal.id}`,
 				);

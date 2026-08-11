@@ -128,9 +128,7 @@ describe("AutonomyController", () => {
 				status: "pass",
 				evidence: `${gateId}:pass`,
 				reporter:
-					gateId === "native-goal"
-						? "native-goal-event"
-						: "host-verifier",
+					gateId === "native-goal" ? "native-goal-event" : "host-verifier",
 				attempt: 1,
 				artifactRevision: 0,
 			});
@@ -180,9 +178,7 @@ describe("AutonomyController", () => {
 				status: "pass",
 				evidence: `${gateId}:pass`,
 				reporter:
-					gateId === "native-goal"
-						? "native-goal-event"
-						: "host-verifier",
+					gateId === "native-goal" ? "native-goal-event" : "host-verifier",
 				attempt: 1,
 				artifactRevision: 0,
 			});
@@ -273,12 +269,12 @@ describe("AutonomyStore", () => {
 			store.save(cancelled, 1),
 		]);
 
-		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
-			1,
-		);
-		expect(results.filter((result) => result.status === "rejected")).toHaveLength(
-			1,
-		);
+		expect(
+			results.filter((result) => result.status === "fulfilled"),
+		).toHaveLength(1);
+		expect(
+			results.filter((result) => result.status === "rejected"),
+		).toHaveLength(1);
 		expect((await store.load())?.revision).toBe(2);
 	});
 });

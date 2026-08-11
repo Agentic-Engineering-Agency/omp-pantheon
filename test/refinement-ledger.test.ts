@@ -109,15 +109,15 @@ describe("RefinementLedger", () => {
 			ledger.activate(second.id, "sha256:base"),
 		]);
 
-		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
-			1,
-		);
-		expect(results.filter((result) => result.status === "rejected")).toHaveLength(
-			1,
-		);
-		expect((await ledger.list()).filter((item) => item.status === "active")).toHaveLength(
-			1,
-		);
+		expect(
+			results.filter((result) => result.status === "fulfilled"),
+		).toHaveLength(1);
+		expect(
+			results.filter((result) => result.status === "rejected"),
+		).toHaveLength(1);
+		expect(
+			(await ledger.list()).filter((item) => item.status === "active"),
+		).toHaveLength(1);
 	});
 
 	test("records rollback without mutating the artifact", async () => {
