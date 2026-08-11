@@ -8,6 +8,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 
 import { CommandJournal } from "./journal";
+import { PersistedScheduler } from "./scheduler";
 import { AutonomyWorker, OmpSessionExecutor } from "./worker";
 
 const DAEMON_NAME = "pantheon-agentd";
@@ -127,13 +128,15 @@ function parseRoot(args: string[]): string {
 
 async function runAgentd(args: string[]): Promise<void> {
 	const root = parseRoot(args);
+	const journal = new CommandJournal(root);
 	const worker = new AutonomyWorker(
-		new CommandJournal(root),
+		journal,
 		new OmpSessionExecutor(),
 		{
 			workerId: `agentd-${process.pid}-${randomUUID()}`,
 			leaseMs: 60_000,
 		},
+		new PersistedScheduler(root, journal),
 	);
 	const shutdown = new AbortController();
 	const stop = (): void => shutdown.abort();

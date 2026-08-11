@@ -73,11 +73,6 @@ export class AutonomyController {
 				`Autonomy run ${existing.id} is already ${existing.status}`,
 			);
 		}
-		if (existing !== null) {
-			throw new AutonomyTransitionError(
-				"Starting a replacement run requires archiving the terminal journal",
-			);
-		}
 
 		const timestamp = this.now();
 		const state: AutonomyRun = {
@@ -85,7 +80,7 @@ export class AutonomyController {
 			id: this.createId(),
 			task: args.task.trim(),
 			status: "running",
-			revision: 1,
+			revision: (existing?.revision ?? 0) + 1,
 			attempt: 1,
 			maxAttempts: args.maxAttempts,
 			artifactRevision: 0,

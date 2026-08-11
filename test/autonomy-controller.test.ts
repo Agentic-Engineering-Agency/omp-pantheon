@@ -151,6 +151,53 @@ describe("AutonomyController", () => {
 			AutonomyTransitionError,
 		);
 	});
+	test("starts a fresh run after terminal completion without breaking journal continuity", async () => {
+		const { controller, root, store } = await createHarness();
+		await startRun(controller);
+		for (const gateId of ["native-goal", "verification"]) {
+			await controller.recordGate({
+				gateId,
+				status: "pass",
+				evidence: `${gateId}:pass`,
+				attempt: 1,
+				artifactRevision: 0,
+			});
+		}
+		await controller.evaluateCompletion();
+		const replacement = new AutonomyController(store, {
+			now: () => "2026-08-11T13:00:00.000Z",
+			createId: () => "run-2",
+		});
+
+		const started = await replacement.start({
+			task: "Ship the next verified goal",
+			maxAttempts: 2,
+			gates: [{ id: "verification", label: "Targeted verification" }],
+		});
+
+		expect(started).toMatchObject({
+			id: "run-2",
+			status: "running",
+			revision: 5,
+		});
+		const events = (
+			await readFile(join(root, ".pi", "autonomy", "events.jsonl"), "utf8")
+		)
+			.trim()
+			.split("\n")
+			.map(
+				(line) =>
+					JSON.parse(line) as { sequence: number; state: { id: string } },
+			);
+		expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5]);
+		expect(events.map((event) => event.state.id)).toEqual([
+			"run-1",
+			"run-1",
+			"run-1",
+			"run-1",
+			"run-2",
+		]);
+	});
 });
 
 describe("AutonomyStore", () => {

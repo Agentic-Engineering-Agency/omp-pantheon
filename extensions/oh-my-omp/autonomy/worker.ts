@@ -5,6 +5,7 @@ import type {
 	CommandPersistenceReceipt,
 	WorkerCommand,
 } from "./journal";
+import type { PersistedScheduler } from "./scheduler";
 
 export interface CommandExecutor {
 	execute(
@@ -136,6 +137,7 @@ export class AutonomyWorker {
 		private readonly journal: CommandJournal,
 		private readonly executor: CommandExecutor,
 		private readonly options: AutonomyWorkerOptions,
+		private readonly scheduler?: PersistedScheduler,
 	) {
 		this.#pollMs = options.pollMs ?? 250;
 		if (options.workerId.trim().length === 0) {
@@ -148,6 +150,10 @@ export class AutonomyWorker {
 
 	async runOnce(): Promise<boolean> {
 		if (this.#closed) return false;
+		await this.scheduler?.deliverDue(
+			this.options.workerId,
+			this.options.leaseMs,
+		);
 		const claimed = await this.journal.claimNext(
 			this.options.workerId,
 			this.options.leaseMs,
