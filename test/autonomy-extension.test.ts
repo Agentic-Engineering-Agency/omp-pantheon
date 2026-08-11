@@ -652,6 +652,95 @@ describe("autonomy extension", () => {
 		expect(notifications.at(-1)).not.toContain("succeeded");
 	});
 
+	test("pause stops the worker and blocks verification until resume", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-pause-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-pause-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const sessionFile = join(cwd, "session.jsonl");
+		const starts: string[] = [];
+		const stops: string[] = [];
+		let verificationCalls = 0;
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							verificationCalls += 1;
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						now: () => "2026-08-11T22:30:00.000Z",
+						agentdFactory: () => ({
+							async start(runId) {
+								starts.push(runId);
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop(runId) {
+								stops.push(runId);
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Pause safely" --max-attempts=3',
+			extension.ctx,
+		);
+		await extension.handlers.agent_end?.[0]?.({ messages: [] }, extension.ctx);
+		const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+		const running = await new AutonomyStore(cwd, { stateDirectory }).load();
+		if (running === null) throw new Error("Expected autonomy state");
+		const runtimeRoot = autonomyRuntimeRoot(cwd, running.id, stateHome);
+		const journal = new CommandJournal(runtimeRoot, {
+			expectedRunId: running.id,
+			expectedCwd: cwd,
+		});
+		expect(
+			await new PersistedScheduler(runtimeRoot, journal).list(),
+		).toHaveLength(1);
+
+		await extension.commands.autonomy?.handler("pause", extension.ctx);
+
+		expect(stops).toEqual([running.id]);
+		expect(
+			(await new AutonomyStore(cwd, { stateDirectory }).load())?.status,
+		).toBe("paused");
+		await expect(
+			extension.tools.autonomy_gate?.execute(
+				"paused-verification",
+				{},
+				undefined,
+				undefined,
+				extension.ctx,
+			),
+		).rejects.toThrow("paused");
+		expect(verificationCalls).toBe(0);
+
+		await extension.commands.autonomy?.handler("resume", extension.ctx);
+
+		expect(starts).toEqual([running.id, running.id]);
+		expect(
+			(await new AutonomyStore(cwd, { stateDirectory }).load())?.status,
+		).toBe("running");
+		expect(
+			await new PersistedScheduler(runtimeRoot, journal).list(),
+		).toHaveLength(1);
+	});
+
 	test("queues a persistent continuation and resumes its daemon in a new session", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-project-"));
 		const stateHome = await mkdtemp(join(tmpdir(), "pantheon-autonomy-state-"));

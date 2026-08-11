@@ -173,6 +173,11 @@ export class AutonomyController {
 
 	async recordGate(args: RecordAutonomyGateArgs): Promise<AutonomyRun> {
 		const state = await this.requireMutable("record gate evidence");
+		if (state.status === "paused") {
+			throw new AutonomyTransitionError(
+				"Cannot record gate evidence while autonomy is paused",
+			);
+		}
 		if (args.attempt !== state.attempt) {
 			throw new AutonomyTransitionError(
 				`Gate evidence targets attempt ${args.attempt}, current attempt is ${state.attempt}`,

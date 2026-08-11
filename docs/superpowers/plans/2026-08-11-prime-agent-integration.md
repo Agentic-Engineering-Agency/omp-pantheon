@@ -15,7 +15,7 @@
 - Preserve OMP's existing discovery contracts for agents, skills, commands, hooks, extensions, and MCP servers.
 - Keep all new autonomy opt-in and project-scoped, with operational state in private per-user storage. Default OMP/Pantheon behavior must remain unchanged.
 - Replace the Ralph/ULW loop runtime; do not keep two competing autonomous-loop conventions.
-- Treat model text, completion promises, and agent self-assessment as evidence only. They can never satisfy a completion gate by themselves.
+- Treat model text, completion promises, and agent self-assessment as non-evidence status text. They never satisfy or contribute to a completion gate.
 - Reuse OMP native goals, SDK sessions, `eval`, `agent`, Task/Hub, and the launch broker. Do not copy Prime's single-notebook tool surface or fork its Pi packages.
 - Never deserialize executable checkpoint payloads. Persist JSON-compatible values plus metadata and reject unsupported values.
 - Keep refinements append-only, attributable, reversible, conflict-checked, and approval-gated before activation.

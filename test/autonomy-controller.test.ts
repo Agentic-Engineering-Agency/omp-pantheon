@@ -116,6 +116,24 @@ describe("AutonomyController", () => {
 		expect((await controller.get())?.status).toBe("waiting");
 	});
 
+	test("rejects gate evidence while paused", async () => {
+		const { controller } = await createHarness();
+		const started = await startRun(controller);
+		await controller.pause();
+
+		await expect(
+			controller.recordGate({
+				gateId: "verification",
+				status: "pass",
+				evidence: "command:bun-test:exit-0",
+				reporter: "host-verifier",
+				attempt: started.attempt,
+				artifactRevision: started.artifactRevision,
+			}),
+		).rejects.toThrow("paused");
+		expect((await controller.get())?.status).toBe("paused");
+	});
+
 	test("requires every gate to pass for the current attempt and artifact", async () => {
 		const { controller } = await createHarness();
 		await startRun(controller);

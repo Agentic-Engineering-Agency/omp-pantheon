@@ -164,7 +164,16 @@ export class AutonomyRuntime {
 	}
 
 	async pause(): Promise<AutonomyRun> {
-		return (await this.requireController()).pause();
+		const controller = await this.requireController();
+		const state = await controller.get();
+		if (state === null) {
+			throw new AutonomyTransitionError("No autonomy run exists");
+		}
+		if (ACTIVE_STATUSES[state.status] !== true && state.status !== "paused") {
+			return controller.pause();
+		}
+		await this.agentd?.stop(state.id);
+		return controller.pause();
 	}
 
 	async resume(): Promise<AutonomyRun> {
@@ -190,6 +199,11 @@ export class AutonomyRuntime {
 		const state = await controller.get();
 		if (state === null) {
 			throw new AutonomyTransitionError("No autonomy run exists");
+		}
+		if (ACTIVE_STATUSES[state.status] !== true) {
+			throw new AutonomyTransitionError(
+				`Cannot verify autonomy while ${state.status}`,
+			);
 		}
 		const receipt = await this.verifier.verify(
 			this.cwd ?? "",
