@@ -15,6 +15,10 @@ import {
 	assertNoSymlinkComponents,
 	ensurePrivateDirectory,
 } from "../private-files";
+import {
+	preparePrivateProjectAreaRoot,
+	privateProjectAreaRoot,
+} from "../private-state";
 import { terminateProcessTree } from "./process-tree";
 
 import type { PythonSkillManifest } from "./manifest";
@@ -42,6 +46,7 @@ export interface PythonSkillEnvironmentOptions {
 	lockTimeoutMs?: number;
 	staleLockMs?: number;
 	provisioningTimeoutMs?: number;
+	stateHome?: string;
 }
 
 const ENVIRONMENT_MARKER = ".pantheon-environment.json";
@@ -64,16 +69,24 @@ function checksum(value: unknown): string {
 
 export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 	private readonly root: string;
+	private readonly areaRoot: string;
 	private readonly pythonPath: string;
 	private readonly lockTimeoutMs: number;
 	private readonly staleLockMs: number;
+	private readonly stateHome?: string;
 	private readonly provisioningTimeoutMs: number;
 
 	constructor(
 		private readonly projectRoot: string,
 		options: PythonSkillEnvironmentOptions = {},
 	) {
-		this.root = join(projectRoot, ".pi", "python-skills", "venvs");
+		this.areaRoot = privateProjectAreaRoot(
+			projectRoot,
+			"python-skills",
+			options.stateHome,
+		);
+		this.root = join(this.areaRoot, "venvs");
+		this.stateHome = options.stateHome;
 		this.pythonPath = options.pythonPath ?? "python3";
 		this.lockTimeoutMs = options.lockTimeoutMs ?? 30_000;
 		this.staleLockMs = options.staleLockMs ?? 5 * 60_000;
@@ -83,7 +96,12 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 	async provision(
 		manifest: PythonSkillManifest,
 	): Promise<ProvisionedPythonEnvironment> {
-		await assertNoSymlinkComponents(this.projectRoot, this.root);
+		await preparePrivateProjectAreaRoot(
+			this.projectRoot,
+			"python-skills",
+			this.stateHome,
+		);
+		await assertNoSymlinkComponents(this.areaRoot, this.root);
 		const environmentHash = createHash("sha256")
 			.update(
 				JSON.stringify({
@@ -226,7 +244,7 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 		}
 		const markerPath = join(environmentPath, ENVIRONMENT_MARKER);
 		for (const path of [environmentPython, markerPath]) {
-			await assertNoSymlinkComponents(this.projectRoot, path);
+			await assertNoSymlinkComponents(this.areaRoot, path);
 			const metadata = await lstat(path);
 			if (
 				metadata.isSymbolicLink() ||

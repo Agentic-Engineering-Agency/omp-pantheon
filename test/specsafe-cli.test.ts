@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { readSpecSafeClosureReceipt } from "../extensions/oh-my-omp/specsafe-receipts";
 import {
 	type CostCounter,
 	type StateFile,
@@ -40,6 +41,10 @@ function runCli(...args: string[]): SpawnSyncReturns<string> {
 	return spawnSync("bun", ["run", cliPath, ...args], {
 		cwd: tempDir,
 		encoding: "utf-8",
+		env: {
+			...process.env,
+			XDG_STATE_HOME: path.join(tempDir, ".state"),
+		},
 	});
 }
 
@@ -105,6 +110,19 @@ describe("[unit] specsafe CLI lifecycle", () => {
 			costSummary: expectedZeroCostCounter,
 		});
 		expectIsoString(state?.history[0]?.endedAt);
+		expect(
+			readSpecSafeClosureReceipt(
+				tempDir,
+				"TEST-001",
+				beganAt,
+				path.join(tempDir, ".state"),
+			),
+		).toMatchObject({
+			sliceId: "TEST-001",
+			beganAt,
+			outcome: "PASS",
+			endedAt: state?.history[0]?.endedAt,
+		});
 	});
 
 	test("C3 status reports OPEN with the slice id and reports no slice open after close", () => {

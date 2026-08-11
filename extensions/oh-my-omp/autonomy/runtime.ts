@@ -139,7 +139,11 @@ export class AutonomyRuntime {
 			task,
 			maxAttempts,
 			verificationCommand,
-			gates: configuredAutonomyGates(this.cwd ?? ""),
+			gates: configuredAutonomyGates(
+				this.cwd ?? "",
+				this.stateHome,
+				this.options.now?.() ?? new Date().toISOString(),
+			),
 		});
 		await this.agentd?.start(state.id);
 		return state;
@@ -270,7 +274,11 @@ export class AutonomyRuntime {
 		const state = await controller.get();
 		if (state === null || ACTIVE_STATUSES[state.status] !== true) return;
 
-		for (const receipt of evaluateConfiguredHostGates(this.cwd ?? "", state)) {
+		for (const receipt of evaluateConfiguredHostGates(
+			this.cwd ?? "",
+			state,
+			this.stateHome,
+		)) {
 			await controller.recordGate({
 				...receipt,
 				attempt: state.attempt,

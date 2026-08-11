@@ -53,7 +53,9 @@ async function assertRegularSqlitePath(
 	try {
 		const metadata = await lstat(path);
 		if (metadata.isSymbolicLink()) {
-			throw new FileLockError(`Refusing symbolic link SQLite ${label}: ${path}`);
+			throw new FileLockError(
+				`Refusing symbolic link SQLite ${label}: ${path}`,
+			);
 		}
 		if (!metadata.isFile() || metadata.nlink !== 1) {
 			throw new FileLockError(
@@ -65,7 +67,6 @@ async function assertRegularSqlitePath(
 		throw error;
 	}
 }
-
 
 async function assertGuardDatabasePath(path: string): Promise<void> {
 	await assertRegularSqlitePath(path, "guard");
@@ -186,7 +187,8 @@ export async function acquireFileLock(
 							) as Partial<LockMetadata>;
 							if (current.token === token) await rm(path, { force: true });
 						} catch (error) {
-							if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+							if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+								throw error;
 						} finally {
 							releaseGuard(guard);
 						}

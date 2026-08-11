@@ -84,6 +84,8 @@ Create or modify these units:
 
 **Files:**
 - Create: `extensions/oh-my-omp/autonomy/gates.ts`
+- Create: `extensions/oh-my-omp/specsafe-receipts.ts`
+- Create: `extensions/oh-my-omp/private-state.ts`
 - Create: `extensions/oh-my-omp/autonomy/commands.ts`
 - Modify: `extensions/oh-my-omp/index.ts`
 - Remove: `extensions/oh-my-omp/loop/runtime.ts`
@@ -95,8 +97,8 @@ Create or modify these units:
 - Modify: `tsconfig.json`
 
 - [ ] Test default-off registration and the `/autonomy` command lifecycle.
-- [ ] Test adapters for native OMP goal completion, targeted test/smoke evidence, EvalFly enforcement, and SpecSafe closure.
-- [ ] Test fail-closed behavior when a configured gate is unavailable, stale, or malformed.
+- [ ] Test adapters for native OMP goal completion, targeted test/smoke evidence, EvalFly enforcement, and SpecSafe closure backed by a private, activation-bound receipt.
+- [ ] Test fail-closed behavior when a configured gate is unavailable, stale, malformed, project-forged, or replayed.
 - [ ] Register hooks only after contract tests pass.
 - [ ] Remove Ralph/ULW runtime imports, state files, commands, promise detection, and formatting/typecheck references.
 - [ ] Keep unrelated `ultrawork` prompt commands unchanged unless they directly invoke the deleted loop runtime.
@@ -123,13 +125,14 @@ Create or modify these units:
 - Create: `extensions/oh-my-omp/python-skills/manifest.ts`
 - Create: `extensions/oh-my-omp/python-skills/environment.ts`
 - Create: `extensions/oh-my-omp/python-skills/runner.ts`
+- Create: `extensions/oh-my-omp/python-skills/process-tree.ts`
 - Create: `test/python-skills.test.ts`
 
 - [ ] Define and test manifest fields: Python requirement, locked dependencies, entrypoint, timeout, environment allowlist, network policy, input/output schemas, and maximum output bytes.
 - [ ] Reject unpinned dependencies, path traversal, undeclared environment access, unsupported protocols, and duplicate skill IDs.
-- [ ] Build content-addressed environments under project-local `.pi/python-skills/venvs/`, guarded by exclusive creation locks.
-- [ ] Invoke the entrypoint with JSON on stdin and require one bounded JSON response on stdout; keep stderr as diagnostics.
-- [ ] Test success, schema rejection, timeout/process-tree termination, oversized output, nonzero exit, and cache reuse with a fixture skill.
+- [ ] Build content-addressed environments in private per-user XDG state, guarded by exclusive creation locks.
+- [ ] Serialize and validate input before provisioning; invoke the entrypoint with JSON on stdin and require one bounded JSON response on stdout; keep stderr as diagnostics.
+- [ ] Test success, schema rejection, timeout/process-tree termination, oversized output, nonzero exit, cache isolation, and cache reuse with a fixture skill.
 - [ ] Run `bun test test/python-skills.test.ts` and `bun run typecheck`.
 
 ### Task 6: Persistent worker and command journal

@@ -305,7 +305,9 @@ export class AutonomyStore {
 					typeof requirement.sliceId !== "string" ||
 					requirement.sliceId.trim().length === 0 ||
 					typeof requirement.beganAt !== "string" ||
-					!Number.isFinite(Date.parse(requirement.beganAt))
+					!Number.isFinite(Date.parse(requirement.beganAt)) ||
+					typeof requirement.activatedAt !== "string" ||
+					!Number.isFinite(Date.parse(requirement.activatedAt))
 				) {
 					return false;
 				}

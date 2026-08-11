@@ -177,6 +177,21 @@ export class PythonSkillRunner {
 		input: unknown,
 	): Promise<PythonSkillRunResult> {
 		assertObjectContract(input, manifest.input, "input");
+		let serializedInput: string;
+		try {
+			const encoded = JSON.stringify(input);
+			if (encoded === undefined) {
+				throw new Error("JSON.stringify returned undefined");
+			}
+			assertObjectContract(JSON.parse(encoded), manifest.input, "input");
+			serializedInput = encoded;
+		} catch (error) {
+			if (error instanceof PythonSkillRunnerError) throw error;
+			throw new PythonSkillRunnerError(
+				"Python skill input is not one JSON-serializable object",
+				{ cause: error },
+			);
+		}
 		if (manifest.network === "deny" && this.networkSandbox === undefined) {
 			throw new PythonSkillRunnerError(
 				"Python skill requests network denial but no network sandbox is available",
@@ -225,7 +240,7 @@ export class PythonSkillRunner {
 			stderr: "pipe",
 			detached: true,
 		});
-		processHandle.stdin.write(`${JSON.stringify(input)}\n`);
+		processHandle.stdin.write(`${serializedInput}\n`);
 		processHandle.stdin.end();
 
 		let timedOut = false;

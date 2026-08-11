@@ -56,7 +56,8 @@ function hasValidGateRequirement(
 		case "specsafe":
 			return (
 				requirement.sliceId.trim().length > 0 &&
-				Number.isFinite(Date.parse(requirement.beganAt))
+				Number.isFinite(Date.parse(requirement.beganAt)) &&
+				Number.isFinite(Date.parse(requirement.activatedAt))
 			);
 	}
 }

@@ -3,6 +3,10 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 
 export async function ensurePrivateDirectory(path: string): Promise<void> {
 	await mkdir(path, { recursive: true, mode: 0o700 });
+	const metadata = await lstat(path);
+	if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+		throw new Error(`Private state path is not an owned directory: ${path}`);
+	}
 	await chmod(path, 0o700);
 }
 export async function assertNoSymlinkComponents(
@@ -32,7 +36,6 @@ export async function assertNoSymlinkComponents(
 		}
 	}
 }
-
 
 export async function appendPrivateFile(
 	path: string,

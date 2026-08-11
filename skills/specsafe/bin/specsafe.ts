@@ -22,6 +22,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { writeSpecSafeClosureReceipt } from "../../../extensions/oh-my-omp/specsafe-receipts";
 import {
 	type CostCounter,
 	type CurrentSlice,
@@ -137,6 +138,12 @@ function cmdEnd(args: string[], statePath: string): number {
 			subagentTokens: { ...slice.costCounter.subagentTokens },
 		},
 	};
+	writeSpecSafeClosureReceipt(process.cwd(), {
+		sliceId: entry.sliceId,
+		beganAt: entry.beganAt,
+		endedAt: entry.endedAt,
+		outcome: entry.outcome,
+	});
 	const next: StateFile = {
 		currentSlice: null,
 		history: [...state.history, entry],

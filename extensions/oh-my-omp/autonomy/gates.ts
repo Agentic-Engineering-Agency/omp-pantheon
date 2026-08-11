@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 
 import { readEvalFlyEnforcementState } from "../../../skills/evalfly/bin/enforcement-state";
 import { evaluateEvalFlyCompletionGate } from "../evalfly/enforcement-gate";
+import { readSpecSafeClosureReceipt } from "../specsafe-receipts";
 
 import type {
 	AutonomyGateDefinition,
@@ -137,7 +138,11 @@ function readSpecSafeState(cwd: string): SpecSafeState | null {
 	return { currentSlice, history };
 }
 
-export function configuredAutonomyGates(cwd: string): AutonomyGateDefinition[] {
+export function configuredAutonomyGates(
+	cwd: string,
+	stateHome?: string,
+	activatedAt = new Date().toISOString(),
+): AutonomyGateDefinition[] {
 	const gates: AutonomyGateDefinition[] = [
 		{
 			id: "native-goal",
@@ -182,6 +187,7 @@ export function configuredAutonomyGates(cwd: string): AutonomyGateDefinition[] {
 				kind: "specsafe",
 				sliceId: specSafe.currentSlice.id,
 				beganAt: specSafe.currentSlice.beganAt,
+				activatedAt,
 			},
 		});
 	}
@@ -237,6 +243,7 @@ function evaluateEvalFlyGate(
 function evaluateSpecSafeGate(
 	cwd: string,
 	gate: AutonomyGateRecord,
+	stateHome?: string,
 ): HostGateReceipt {
 	if (gate.requirement.kind !== "specsafe") {
 		throw new Error("SpecSafe gate has an invalid requirement");
@@ -244,26 +251,52 @@ function evaluateSpecSafeGate(
 	const requirement = gate.requirement;
 	try {
 		const state = readSpecSafeState(cwd);
-		const closure = state?.history.find(
-			(entry) =>
-				entry.sliceId === requirement.sliceId &&
-				entry.beganAt === requirement.beganAt,
-		);
-		if (closure?.outcome === "PASS") {
+		const matchingClosures =
+			state?.history.filter(
+				(entry) =>
+					entry.sliceId === requirement.sliceId &&
+					entry.beganAt === requirement.beganAt,
+			) ?? [];
+		const sameInstanceStillOpen =
+			state?.currentSlice?.id === requirement.sliceId &&
+			state.currentSlice.beganAt === requirement.beganAt;
+		if (sameInstanceStillOpen || matchingClosures.length !== 1) {
 			return {
 				gateId: gate.id,
-				status: "pass",
-				evidence: `specsafe:${closure.sliceId}:${closure.beganAt}:PASS:${closure.endedAt}`,
+				status: "fail",
+				evidence: sameInstanceStillOpen
+					? `specsafe:${requirement.sliceId}:${requirement.beganAt}:still-open`
+					: `specsafe:${requirement.sliceId}:${requirement.beganAt}:closure-count:${matchingClosures.length}`,
+				reporter: "specsafe-adapter",
+			};
+		}
+		const closure = matchingClosures[0];
+		const receipt = readSpecSafeClosureReceipt(
+			cwd,
+			requirement.sliceId,
+			requirement.beganAt,
+			stateHome,
+		);
+		if (
+			receipt === null ||
+			receipt.outcome !== closure?.outcome ||
+			receipt.endedAt !== closure.endedAt ||
+			Date.parse(receipt.endedAt) < Date.parse(requirement.activatedAt)
+		) {
+			return {
+				gateId: gate.id,
+				status: "fail",
+				evidence:
+					receipt === null
+						? `specsafe:${requirement.sliceId}:${requirement.beganAt}:private-receipt-unavailable`
+						: `specsafe:${requirement.sliceId}:${requirement.beganAt}:private-receipt-mismatch-or-stale`,
 				reporter: "specsafe-adapter",
 			};
 		}
 		return {
 			gateId: gate.id,
-			status: "fail",
-			evidence:
-				closure === undefined
-					? `specsafe:${requirement.sliceId}:${requirement.beganAt}:closure-unavailable`
-					: `specsafe:${closure.sliceId}:${closure.beganAt}:${closure.outcome}:${closure.endedAt}`,
+			status: receipt.outcome === "PASS" ? "pass" : "fail",
+			evidence: `specsafe:${receipt.sliceId}:${receipt.beganAt}:${receipt.outcome}:${receipt.endedAt}:private-receipt`,
 			reporter: "specsafe-adapter",
 		};
 	} catch (error) {
@@ -279,13 +312,14 @@ function evaluateSpecSafeGate(
 export function evaluateConfiguredHostGates(
 	cwd: string,
 	state: AutonomyRun,
+	stateHome?: string,
 ): HostGateReceipt[] {
 	const receipts: HostGateReceipt[] = [];
 	for (const gate of state.gates) {
 		if (gate.requirement.kind === "evalfly") {
 			receipts.push(evaluateEvalFlyGate(cwd, gate));
 		} else if (gate.requirement.kind === "specsafe") {
-			receipts.push(evaluateSpecSafeGate(cwd, gate));
+			receipts.push(evaluateSpecSafeGate(cwd, gate, stateHome));
 		}
 	}
 	return receipts;

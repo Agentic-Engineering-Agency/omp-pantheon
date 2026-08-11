@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { privateProjectAreaRoot } from "../extensions/oh-my-omp/private-state";
 import { PythonSkillEnvironment } from "../extensions/oh-my-omp/python-skills/environment";
 import {
 	PythonSkillManifestError,
@@ -58,6 +59,16 @@ function manifestEnvironmentHash(manifest: ReturnType<typeof validManifest>) {
 			}),
 		)
 		.digest("hex");
+}
+function pythonStateHome(root: string): string {
+	return join(root, ".state");
+}
+
+function pythonCacheRoot(root: string): string {
+	return join(
+		privateProjectAreaRoot(root, "python-skills", pythonStateHome(root)),
+		"venvs",
+	);
 }
 
 afterEach(async () => {
@@ -105,11 +116,15 @@ describe("Python skill environment", () => {
 	test("creates and reuses a content-addressed virtualenv", async () => {
 		if (!pythonPath) throw new Error("python3 is required for this test");
 		const root = await createRoot();
-		const environment = new PythonSkillEnvironment(root, { pythonPath });
+		const environment = new PythonSkillEnvironment(root, {
+			pythonPath,
+			stateHome: pythonStateHome(root),
+		});
 
 		const first = await environment.provision(validManifest());
 		const second = await environment.provision(validManifest());
 
+		expect(first.pythonPath.startsWith(pythonCacheRoot(root))).toBe(true);
 		expect(first.reused).toBe(false);
 		expect(second.reused).toBe(true);
 		expect(second.pythonPath).toBe(first.pythonPath);
@@ -121,16 +136,8 @@ describe("Python skill environment", () => {
 		const root = await createRoot();
 		const manifest = validManifest();
 		const environmentHash = manifestEnvironmentHash(manifest);
-		const lockPath = join(
-			root,
-			".pi",
-			"python-skills",
-			"venvs",
-			`${environmentHash}.lock`,
-		);
-		await mkdir(join(root, ".pi", "python-skills", "venvs"), {
-			recursive: true,
-		});
+		const lockPath = join(pythonCacheRoot(root), `${environmentHash}.lock`);
+		await mkdir(pythonCacheRoot(root), { recursive: true });
 		await writeFile(
 			lockPath,
 			JSON.stringify({
@@ -143,6 +150,7 @@ describe("Python skill environment", () => {
 			pythonPath,
 			lockTimeoutMs: 2_000,
 			staleLockMs: 10,
+			stateHome: pythonStateHome(root),
 		});
 
 		const provisioned = await environment.provision(manifest);
@@ -150,13 +158,18 @@ describe("Python skill environment", () => {
 		expect(provisioned.reused).toBe(false);
 		expect(await Bun.file(provisioned.pythonPath).exists()).toBe(true);
 	}, 20_000);
-	test("refuses a symlinked project environment cache", async () => {
+
+	test("refuses a symlinked private environment cache", async () => {
 		const root = await createRoot();
 		const outside = await createRoot();
-		await mkdir(join(root, ".pi", "python-skills"), { recursive: true });
-		await symlink(outside, join(root, ".pi", "python-skills", "venvs"), "dir");
+		await mkdir(
+			privateProjectAreaRoot(root, "python-skills", pythonStateHome(root)),
+			{ recursive: true },
+		);
+		await symlink(outside, pythonCacheRoot(root), "dir");
 		const environment = new PythonSkillEnvironment(root, {
 			pythonPath: pythonPath ?? "python3",
+			stateHome: pythonStateHome(root),
 		});
 
 		await expect(environment.provision(validManifest())).rejects.toThrow(
@@ -169,18 +182,14 @@ describe("Python skill environment", () => {
 		const outside = await createRoot();
 		const manifest = validManifest();
 		const environmentPath = join(
-			root,
-			".pi",
-			"python-skills",
-			"venvs",
+			pythonCacheRoot(root),
 			manifestEnvironmentHash(manifest),
 		);
-		await mkdir(join(root, ".pi", "python-skills", "venvs"), {
-			recursive: true,
-		});
+		await mkdir(pythonCacheRoot(root), { recursive: true });
 		await symlink(outside, environmentPath, "dir");
 		const environment = new PythonSkillEnvironment(root, {
 			pythonPath: pythonPath ?? "python3",
+			stateHome: pythonStateHome(root),
 		});
 
 		await expect(environment.provision(manifest)).rejects.toThrow(
@@ -193,10 +202,7 @@ describe("Python skill environment", () => {
 		const outside = await createRoot();
 		const manifest = validManifest();
 		const environmentPath = join(
-			root,
-			".pi",
-			"python-skills",
-			"venvs",
+			pythonCacheRoot(root),
 			manifestEnvironmentHash(manifest),
 		);
 		await mkdir(join(environmentPath, "bin"), { recursive: true });
@@ -205,6 +211,7 @@ describe("Python skill environment", () => {
 		await symlink(outsidePython, join(environmentPath, "bin", "python"));
 		const environment = new PythonSkillEnvironment(root, {
 			pythonPath: pythonPath ?? "python3",
+			stateHome: pythonStateHome(root),
 		});
 
 		await expect(environment.provision(manifest)).rejects.toThrow(
@@ -232,6 +239,7 @@ describe("Python skill environment", () => {
 		const environment = new PythonSkillEnvironment(root, {
 			pythonPath: fakePython,
 			provisioningTimeoutMs: 1_000,
+			stateHome: pythonStateHome(root),
 		});
 
 		await expect(environment.provision(validManifest())).rejects.toThrow(
@@ -280,6 +288,28 @@ describe("Python skill runner", () => {
 			secret: null,
 		});
 		expect(result.stderr).toBe("");
+	});
+
+	test("serializes and validates input before provisioning or spawning", async () => {
+		const root = await createRoot();
+		await writeFile(join(root, "main.py"), 'print("{}")\n');
+		let provisionCalls = 0;
+		const runner = new PythonSkillRunner({
+			async provision() {
+				provisionCalls += 1;
+				return {
+					pythonPath: Bun.which("true") ?? "/usr/bin/true",
+					reused: true,
+				};
+			},
+		});
+		const input: { message: string; self?: unknown } = { message: "hello" };
+		input.self = input;
+
+		await expect(runner.run(root, validManifest(), input)).rejects.toThrow(
+			PythonSkillRunnerError,
+		);
+		expect(provisionCalls).toBe(0);
 	});
 
 	test("rejects an entrypoint symlink outside the skill root", async () => {

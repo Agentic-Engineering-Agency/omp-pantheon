@@ -13,6 +13,7 @@ import {
 import { PersistedScheduler } from "../extensions/oh-my-omp/autonomy/scheduler";
 import { AutonomyStore } from "../extensions/oh-my-omp/autonomy/store";
 import registerPantheon from "../extensions/oh-my-omp/index";
+import { writeSpecSafeClosureReceipt } from "../extensions/oh-my-omp/specsafe-receipts";
 import { writeEvalFlyEnforcementState } from "../skills/evalfly/bin/enforcement-state";
 
 interface RegisteredCommand {
@@ -104,14 +105,18 @@ async function writePassingEvalFlyRun(cwd: string): Promise<void> {
 	await writeFile(join(cwd, reportPath), report);
 }
 const registerTestAutonomy = (pi: never): unknown =>
-	registerAutonomy(pi, {
-		async verify(_cwd, command) {
-			return {
-				status: "pass",
-				evidence: `command:${command}:exit:0`,
-			};
+	registerAutonomy(
+		pi,
+		{
+			async verify(_cwd, command) {
+				return {
+					status: "pass",
+					evidence: `command:${command}:exit:0`,
+				};
+			},
 		},
-	});
+		{ stateHome: (cwd) => join(cwd, ".test-state") },
+	);
 
 interface FakeExtensionOptions {
 	cwd?: string;
@@ -331,7 +336,7 @@ describe("autonomy extension", () => {
 		);
 		const extension = await createFakeExtension(registerTestAutonomy, { cwd });
 		await extension.commands.autonomy?.handler(
-			'start "Ship with SpecSafe" --max-attempts=2',
+			'start "Ship with SpecSafe" --max-attempts=3',
 			extension.ctx,
 		);
 		await extension.commands.autonomy?.handler("status", extension.ctx);
@@ -363,6 +368,7 @@ describe("autonomy extension", () => {
 			undefined,
 			extension.ctx,
 		);
+		const endedAt = new Date(Date.now() + 1_000).toISOString();
 		await writeFile(
 			statePath,
 			JSON.stringify({
@@ -378,15 +384,139 @@ describe("autonomy extension", () => {
 						sliceId: "SPEC-AUTONOMY",
 						beganAt: "2026-08-11T22:00:00.000Z",
 						outcome: "PASS",
-						endedAt: "2026-08-11T22:00:02.000Z",
+						endedAt,
 					},
 				],
 			}),
 		);
 		await extension.handlers.agent_end?.[0]?.({}, extension.ctx);
+		expect(extension.logs).not.toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+		writeSpecSafeClosureReceipt(
+			cwd,
+			{
+				sliceId: "SPEC-AUTONOMY",
+				beganAt: "2026-08-11T22:00:00.000Z",
+				endedAt,
+				outcome: "PASS",
+			},
+			join(cwd, ".test-state"),
+		);
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "goal-specsafe",
+					objective: "Ship with SpecSafe",
+					status: "active",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "goal-specsafe",
+					objective: "Ship with SpecSafe",
+					status: "complete",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.tools.autonomy_gate?.execute(
+			"verify-specsafe-after-receipt",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		await extension.handlers.agent_end?.[0]?.({}, extension.ctx);
 
 		expect(extension.logs).toContain(
 			"Autonomy run succeeded after objective gates passed",
+		);
+	});
+
+	test("rejects a private SpecSafe receipt created before gate activation", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-specsafe-replay-"),
+		);
+		roots.push(cwd);
+		const beganAt = new Date(Date.now() - 10_000).toISOString();
+		const endedAt = new Date(Date.now() - 5_000).toISOString();
+		const statePath = join(cwd, ".pi", ".specsafe-state.json");
+		await mkdir(join(cwd, ".pi"), { recursive: true });
+		await writeFile(
+			statePath,
+			JSON.stringify({
+				currentSlice: {
+					id: "SPEC-REPLAY",
+					workspaceId: "workspace",
+					sessionId: "session",
+					beganAt,
+					costCounter: {},
+				},
+				history: [],
+			}),
+		);
+		writeSpecSafeClosureReceipt(
+			cwd,
+			{ sliceId: "SPEC-REPLAY", beganAt, endedAt, outcome: "PASS" },
+			join(cwd, ".test-state"),
+		);
+		const extension = await createFakeExtension(registerTestAutonomy, { cwd });
+		await extension.commands.autonomy?.handler(
+			'start "Reject replay" --max-attempts=1',
+			extension.ctx,
+		);
+		await writeFile(
+			statePath,
+			JSON.stringify({
+				currentSlice: null,
+				history: [
+					{
+						sliceId: "SPEC-REPLAY",
+						beganAt,
+						endedAt,
+						outcome: "PASS",
+					},
+				],
+			}),
+		);
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "goal-specsafe-replay",
+					objective: "Reject replay",
+					status: "active",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "goal-specsafe-replay",
+					objective: "Reject replay",
+					status: "complete",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.tools.autonomy_gate?.execute(
+			"verify-specsafe-replay",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		await extension.handlers.agent_end?.[0]?.({}, extension.ctx);
+
+		expect(extension.logs).not.toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+		expect(extension.logs).toContain(
+			"Autonomy run failed at its maximum attempt bound",
 		);
 	});
 
