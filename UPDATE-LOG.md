@@ -26,14 +26,20 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
 - Added checksummed objective and command journals, lease/fencing recovery,
   persisted deadlines, deterministic bounded retries, and verified
   generation-based scheduler compaction.
-- Made `/autonomy pause` an execution fence: it persists pause only after the
-  run-scoped worker reports terminal `exited`/`failed` (or adapter `stopped`),
+- Made an externally initiated `/autonomy pause` an execution fence: it
+  persists pause only after the run-scoped worker reports terminal
+  `exited`/`failed` (or adapter `stopped`),
   rejects verification while paused, and resumes queued work only after
   `/autonomy resume`. Mutations observed while paused still advance the artifact
   revision and invalidate every gate without resuming execution.
-- Made `/autonomy cancel` persist its terminal state only after the worker
-  reports terminal `exited`/`failed` (or adapter `stopped`); stop errors and
+- Made an externally initiated `/autonomy cancel` persist its terminal state
+  only after the worker reports terminal `exited`/`failed` (or adapter
+  `stopped`); stop errors and
   unsettled states leave the run active and are reported to the caller.
+- Added an ownership-aware terminal handshake: external sessions require a
+  terminal broker stop before persisting success, bounded failure, pause, or
+  cancellation; the resident worker persists its own transition, flushes and
+  acknowledges the command, then exits naturally before claiming more work.
 - Added approval-gated refinement and isolated Python skill contracts.
 - Added capability adapters for JSON-only kernel checkpoints and retained
   subagents. Both report unsupported on stock OMP 17.2.14 because the required

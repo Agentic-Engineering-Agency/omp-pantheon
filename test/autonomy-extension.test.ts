@@ -45,6 +45,23 @@ type EventHandler = (event: unknown, ctx: FakeContext) => Promise<void> | void;
 
 const roots: string[] = [];
 
+const TERMINAL_STOP_FAILURES = [
+	{
+		name: "the broker returns a nonterminal state",
+		message: "worker stop is not terminal",
+		async stop() {
+			return { state: "stopping", restartCount: 0 };
+		},
+	},
+	{
+		name: "the broker stop throws",
+		message: "broker stop failed",
+		async stop(): Promise<never> {
+			throw new Error("broker stop failed");
+		},
+	},
+];
+
 async function writePassingEvalFlyRun(cwd: string): Promise<void> {
 	const runId = "autonomy-gate-pass";
 	const reportPath = `evals/reports/${runId}.md`;
@@ -1046,6 +1063,275 @@ describe("autonomy extension", () => {
 		).toBe("cancelled");
 		expect(extension.notifications.at(-1)).toBe("info:Autonomy cancelled.");
 		expect(stopCalls).toBe(2);
+	});
+
+	for (const scenario of TERMINAL_STOP_FAILURES) {
+		test(`does not persist successful completion when ${scenario.name}`, async () => {
+			const cwd = await mkdtemp(
+				join(tmpdir(), "pantheon-autonomy-success-stop-"),
+			);
+			const stateHome = await mkdtemp(
+				join(tmpdir(), "pantheon-autonomy-success-stop-state-"),
+			);
+			roots.push(cwd, stateHome);
+			const extension = await createFakeExtension(
+				(pi) =>
+					registerAutonomy(
+						pi,
+						{
+							async verify(_cwd, command) {
+								return {
+									status: "pass",
+									evidence: `command:${command}:exit:0`,
+								};
+							},
+						},
+						{
+							stateHome,
+							agentdFactory: () => ({
+								async start() {
+									return { state: "ready", restartCount: 0 };
+								},
+								async status() {
+									return { state: "ready", restartCount: 0 };
+								},
+								async stop() {
+									return scenario.stop();
+								},
+								close() {},
+							}),
+						},
+					),
+				{ cwd, sessionFile: join(cwd, "session.jsonl") },
+			);
+			await extension.commands.autonomy?.handler(
+				'start "Fence success" --max-attempts=2',
+				extension.ctx,
+			);
+			await extension.handlers.goal_updated?.[0]?.(
+				{
+					goal: {
+						id: "goal-success",
+						objective: "Fence success",
+						status: "active",
+					},
+				},
+				extension.ctx,
+			);
+			await extension.handlers.goal_updated?.[0]?.(
+				{
+					goal: {
+						id: "goal-success",
+						objective: "Fence success",
+						status: "complete",
+					},
+				},
+				extension.ctx,
+			);
+			await extension.tools.autonomy_gate?.execute(
+				"success-verification",
+				{},
+				undefined,
+				undefined,
+				extension.ctx,
+			);
+
+			await expect(
+				extension.handlers.agent_end?.[0]?.({ messages: [] }, extension.ctx),
+			).rejects.toThrow(scenario.message);
+
+			const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+			expect(
+				(await new AutonomyStore(cwd, { stateDirectory }).load())?.status,
+			).not.toBe("succeeded");
+			expect(extension.logs).not.toContain(
+				"Autonomy run succeeded after objective gates passed",
+			);
+		});
+
+		test(`does not persist attempt-bound failure when ${scenario.name}`, async () => {
+			const cwd = await mkdtemp(
+				join(tmpdir(), "pantheon-autonomy-failure-stop-"),
+			);
+			const stateHome = await mkdtemp(
+				join(tmpdir(), "pantheon-autonomy-failure-stop-state-"),
+			);
+			roots.push(cwd, stateHome);
+			const extension = await createFakeExtension(
+				(pi) =>
+					registerAutonomy(
+						pi,
+						{
+							async verify(_cwd, command) {
+								return {
+									status: "pass",
+									evidence: `command:${command}:exit:0`,
+								};
+							},
+						},
+						{
+							stateHome,
+							agentdFactory: () => ({
+								async start() {
+									return { state: "ready", restartCount: 0 };
+								},
+								async status() {
+									return { state: "ready", restartCount: 0 };
+								},
+								async stop() {
+									return scenario.stop();
+								},
+								close() {},
+							}),
+						},
+					),
+				{ cwd, sessionFile: join(cwd, "session.jsonl") },
+			);
+			await extension.commands.autonomy?.handler(
+				'start "Fence failure" --max-attempts=1',
+				extension.ctx,
+			);
+
+			await expect(
+				extension.handlers.agent_end?.[0]?.({ messages: [] }, extension.ctx),
+			).rejects.toThrow(scenario.message);
+
+			const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+			expect(
+				(await new AutonomyStore(cwd, { stateDirectory }).load())?.status,
+			).not.toBe("failed");
+			expect(extension.logs).not.toContain(
+				"Autonomy run failed at its maximum attempt bound",
+			);
+		});
+	}
+
+	test("resident worker terminalizes naturally without stopping its own daemon", async () => {
+		const createResidentExtension = async (
+			prefix: string,
+		): Promise<{
+			extension: Awaited<ReturnType<typeof createFakeExtension>>;
+			cwd: string;
+			stateHome: string;
+			stopCalls: () => number;
+		}> => {
+			const cwd = await mkdtemp(join(tmpdir(), `pantheon-${prefix}-`));
+			const stateHome = await mkdtemp(
+				join(tmpdir(), `pantheon-${prefix}-state-`),
+			);
+			roots.push(cwd, stateHome);
+			let stops = 0;
+			const extension = await createFakeExtension(
+				(pi) =>
+					registerAutonomy(
+						pi,
+						{
+							async verify(_cwd, command) {
+								return {
+									status: "pass",
+									evidence: `command:${command}:exit:0`,
+								};
+							},
+						},
+						{
+							stateHome,
+							isResidentWorker: () => true,
+							agentdFactory: () => ({
+								async start() {
+									return { state: "ready", restartCount: 0 };
+								},
+								async status() {
+									return { state: "ready", restartCount: 0 };
+								},
+								async stop() {
+									stops += 1;
+									throw new Error("resident worker must not stop itself");
+								},
+								close() {},
+							}),
+						},
+					),
+				{ cwd, sessionFile: join(cwd, "session.jsonl") },
+			);
+			return { extension, cwd, stateHome, stopCalls: () => stops };
+		};
+
+		const success = await createResidentExtension("resident-success");
+		await success.extension.commands.autonomy?.handler(
+			'start "Resident success" --max-attempts=2',
+			success.extension.ctx,
+		);
+		await success.extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "resident-goal",
+					objective: "Resident success",
+					status: "active",
+				},
+			},
+			success.extension.ctx,
+		);
+		await success.extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "resident-goal",
+					objective: "Resident success",
+					status: "complete",
+				},
+			},
+			success.extension.ctx,
+		);
+		await success.extension.tools.autonomy_gate?.execute(
+			"resident-verification",
+			{},
+			undefined,
+			undefined,
+			success.extension.ctx,
+		);
+		await success.extension.handlers.agent_end?.[0]?.(
+			{ messages: [] },
+			success.extension.ctx,
+		);
+		await success.extension.handlers.session_shutdown?.[0]?.(
+			{},
+			success.extension.ctx,
+		);
+		expect(
+			(
+				await new AutonomyStore(success.cwd, {
+					stateDirectory: autonomyProjectStateRoot(
+						success.cwd,
+						success.stateHome,
+					),
+				}).load()
+			)?.status,
+		).toBe("succeeded");
+		expect(success.stopCalls()).toBe(0);
+
+		const failure = await createResidentExtension("resident-failure");
+		await failure.extension.commands.autonomy?.handler(
+			'start "Resident failure" --max-attempts=1',
+			failure.extension.ctx,
+		);
+		await failure.extension.handlers.agent_end?.[0]?.(
+			{ messages: [] },
+			failure.extension.ctx,
+		);
+		await failure.extension.handlers.session_shutdown?.[0]?.(
+			{},
+			failure.extension.ctx,
+		);
+		expect(
+			(
+				await new AutonomyStore(failure.cwd, {
+					stateDirectory: autonomyProjectStateRoot(
+						failure.cwd,
+						failure.stateHome,
+					),
+				}).load()
+			)?.status,
+		).toBe("failed");
+		expect(failure.stopCalls()).toBe(0);
 	});
 
 	test("queues a persistent continuation and resumes its daemon in a new session", async () => {

@@ -137,6 +137,41 @@ describe("AutonomyWorker", () => {
 		expect(observed).toEqual(["claimed", "closed"]);
 	});
 
+	test("exits after an acknowledged command when the run becomes terminal", async () => {
+		const { journal } = await createJournal();
+		await journal.enqueue(command("command-1"));
+		await journal.enqueue(command("command-2"));
+		let terminal = false;
+		let executions = 0;
+		const worker = new AutonomyWorker(
+			journal,
+			{
+				async execute() {
+					executions += 1;
+					terminal = true;
+					return {
+						sessionId: `session-${executions}`,
+						persistedAt: "2026-08-11T12:00:00.500Z",
+					};
+				},
+				async close() {},
+			},
+			{
+				workerId: "worker-a",
+				leaseMs: 5_000,
+				shouldStop: async () => terminal,
+			},
+		);
+
+		await worker.run(new AbortController().signal);
+
+		expect(executions).toBe(1);
+		expect((await journal.list()).map((record) => record.status)).toEqual([
+			"acknowledged",
+			"queued",
+		]);
+	});
+
 	test("does not acknowledge execution without a persistence receipt", async () => {
 		const { journal } = await createJournal();
 		await journal.enqueue(command());

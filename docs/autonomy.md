@@ -10,7 +10,7 @@ It is opt-in. Normal OMP sessions are unchanged until `/autonomy start` is used.
 - Use `@oh-my-pi/pi-coding-agent` 17.2.14 or a compatible 17.x release.
 - Start OMP in the target project. Objective, worker, Python environment, and SpecSafe receipt state are written to private per-user storage; refinement history remains beneath that project's `.pi/` directory.
 
-No global daemon is installed. Starting an autonomy run asks OMP's launch broker to run a run-scoped `pantheon-agentd-<hash>` with `restart: on-failure` and `persist: true`. An active run survives parent-session shutdown so queued work can resume. Terminal success, terminal failure, and cancellation stop that run's worker.
+No global daemon is installed. Starting an autonomy run asks OMP's launch broker to run a run-scoped `pantheon-agentd-<hash>` with `restart: on-failure` and `persist: true`. An active run survives parent-session shutdown so queued work can resume. Externally initiated terminal transitions first fence the worker; a terminal transition emitted by the resident worker uses the acknowledged natural-exit handshake described below.
 
 ## Commands
 
@@ -23,7 +23,7 @@ No global daemon is installed. Starting an autonomy run asks OMP's launch broker
 /autonomy explain
 ```
 
-`start` creates a new run, freezes the host verification command (default: `bun test`), and starts the resident worker. A terminal run may be followed by another run; journal revisions remain contiguous. `pause` persists the paused state only after the run-scoped worker reports a terminal stop (`exited` or `failed`; `stopped` is accepted for compatible adapters), and verification is rejected while paused. Mutating tool results observed while paused still advance the artifact revision and reset every gate without resuming execution. `resume` restarts the worker and preserves/coalesces equivalent queued continuation work; every invalidated gate requires fresh evidence. `cancel` likewise requires a terminal worker stop before persisting cancellation; a stop error or unsettled state leaves the run active and surfaces the failure. `status` reports the run, attempt, artifact revision, gates, and broker worker state.
+`start` creates a new run, freezes the host verification command (default: `bun test`), and starts the resident worker. A terminal run may be followed by another run; journal revisions remain contiguous. An externally initiated `pause` persists the paused state only after the run-scoped worker reports a terminal stop (`exited` or `failed`; `stopped` is accepted for compatible adapters), and verification is rejected while paused. Mutating tool results observed while paused still advance the artifact revision and reset every gate without resuming execution. `resume` restarts the worker and preserves/coalesces equivalent queued continuation work; every invalidated gate requires fresh evidence. An externally initiated `cancel` likewise requires a terminal worker stop before persisting cancellation; a stop error or unsettled state leaves the run active and surfaces the failure. A transition initiated inside the resident worker never asks the broker to stop that same process; it follows the natural-exit handshake below. `status` reports the run, attempt, artifact revision, gates, and broker worker state.
 
 ## Completion contract
 
@@ -49,6 +49,8 @@ Model prose is never completion evidence. `<promise>DONE</promise>`, similar mar
 - the worker waits for idle, flushes the session manager, then records a persistence receipt before acknowledging work.
 
 Commands are journaled before execution. Each command is bound to one autonomy run, one canonical project root, one absolute session file, and a finite attempt bound. When an attempt ends without current gate evidence, the extension durably schedules a continuation before returning; `pantheon-agentd` claims it and reopens that exact session. Claims have leases, periodic heartbeats, and monotonically increasing fencing tokens. An interrupted execution is retried only up to its command bound. If execution completes but durable acknowledgement fails, the command becomes terminal `uncertain` instead of being replayed.
+
+Terminalization is ownership-aware. An external OMP session must receive a terminal broker state before it persists success, bounded failure, pause, or cancellation. The resident `pantheon-agentd` session instead persists the objective transition inside `agent_end`, returns from the handler, waits for the headless session to become idle, flushes it, writes the persistence receipt, and acknowledges the claimed command. The worker then reloads objective state and exits before claiming another command. Its broker process ends naturally; it never sends a stop request to itself.
 
 Objective state, the command journal, and the scheduler are not repository command channels. They live under `${XDG_STATE_HOME:-~/.local/state}/omp-pantheon/autonomy/<project-hash>/`. The extension creates directories with mode `0700` and files with mode `0600`. Paths are derived by the extension and checked again by `pantheon-agentd`; the daemon removes unrelated inherited environment variables before opening OMP sessions.
 

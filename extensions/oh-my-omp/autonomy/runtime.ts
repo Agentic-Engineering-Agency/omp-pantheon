@@ -8,7 +8,11 @@ import type {
 	ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
 
-import { type AgentdStatus, AutonomyAgentd } from "./agentd";
+import {
+	type AgentdStatus,
+	AutonomyAgentd,
+	isCurrentAgentdRun,
+} from "./agentd";
 import { registerAutonomyCommands } from "./commands";
 import { AutonomyController, AutonomyTransitionError } from "./controller";
 import { configuredAutonomyGates, evaluateConfiguredHostGates } from "./gates";
@@ -82,6 +86,7 @@ export interface AutonomyRuntimeOptions {
 	stateHome?: string | ((cwd: string) => string);
 	agentdFactory?: (cwd: string, stateHome?: string) => AgentdClient;
 	now?: () => string;
+	isResidentWorker?: (runId: string) => boolean;
 }
 
 export class AutonomyRuntime {
@@ -174,7 +179,7 @@ export class AutonomyRuntime {
 		if (ACTIVE_STATUSES[state.status] !== true && state.status !== "paused") {
 			return controller.pause();
 		}
-		await this.stopAgentdAndRequireTerminal(state.id);
+		await this.fenceWorkerBeforeTransition(state.id);
 		return controller.pause();
 	}
 
@@ -196,7 +201,7 @@ export class AutonomyRuntime {
 		if (state === null) {
 			throw new AutonomyTransitionError("No autonomy run exists");
 		}
-		await this.stopAgentdAndRequireTerminal(state.id);
+		await this.fenceWorkerBeforeTransition(state.id);
 		return controller.cancel();
 	}
 
@@ -310,25 +315,28 @@ export class AutonomyRuntime {
 				artifactRevision: state.artifactRevision,
 			});
 		}
-		const decision = await controller.evaluateCompletion();
+		const decision = await controller.assessCompletion();
 		if (decision.completed) {
+			await this.fenceWorkerBeforeTransition(state.id);
+			await controller.markSucceeded();
 			this.pi.logger.info(
 				"Autonomy run succeeded after objective gates passed",
 			);
-			await this.stopAgentd(state.id);
 			return;
 		}
-		const continuation = await controller.continueAfterIncomplete();
+		const continuation = await controller.assessContinuation();
 		if (continuation.failed) {
+			await this.fenceWorkerBeforeTransition(state.id);
+			await controller.markFailedAtAttemptBound();
 			this.pi.logger.warn("Autonomy run failed at its maximum attempt bound");
-			await this.stopAgentd(state.id);
 			return;
 		}
+		const nextContinuation = await controller.continueAfterIncomplete();
 		const next = await controller.get();
 		if (next === null) {
 			throw new Error("Autonomy state disappeared before continuation");
 		}
-		await this.scheduleContinuation(next, continuation.pendingGateIds);
+		await this.scheduleContinuation(next, nextContinuation.pendingGateIds);
 	}
 
 	async close(): Promise<void> {
@@ -336,7 +344,8 @@ export class AutonomyRuntime {
 		if (
 			state !== null &&
 			state !== undefined &&
-			ACTIVE_STATUSES[state.status] !== true
+			ACTIVE_STATUSES[state.status] !== true &&
+			!this.isResidentWorker(state.id)
 		) {
 			await this.stopAgentd(state.id);
 		}
@@ -391,6 +400,15 @@ export class AutonomyRuntime {
 			"Produce current objective evidence; completion promises and prose do not satisfy gates.",
 			"</system-reminder>",
 		].join("\n");
+	}
+
+	private isResidentWorker(runId: string): boolean {
+		return this.options.isResidentWorker?.(runId) ?? isCurrentAgentdRun(runId);
+	}
+
+	private async fenceWorkerBeforeTransition(runId: string): Promise<void> {
+		if (this.isResidentWorker(runId)) return;
+		await this.stopAgentdAndRequireTerminal(runId);
 	}
 
 	private async stopAgentdAndRequireTerminal(runId: string): Promise<void> {

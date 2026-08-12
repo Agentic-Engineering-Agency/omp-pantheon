@@ -126,6 +126,7 @@ interface AutonomyWorkerOptions {
 	workerId: string;
 	leaseMs: number;
 	pollMs?: number;
+	shouldStop?: () => Promise<boolean>;
 }
 
 export class AutonomyWorker {
@@ -248,8 +249,11 @@ export class AutonomyWorker {
 
 	async run(signal: AbortSignal): Promise<void> {
 		while (!signal.aborted && !this.#closed) {
+			if (await this.options.shouldStop?.()) break;
 			try {
-				if (await this.runOnce()) continue;
+				const executed = await this.runOnce();
+				if (await this.options.shouldStop?.()) break;
+				if (executed) continue;
 			} catch (error) {
 				if (signal.aborted || this.#closed) break;
 				console.error(

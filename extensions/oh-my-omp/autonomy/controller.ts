@@ -62,6 +62,22 @@ function hasValidGateRequirement(
 	}
 }
 
+function completionDecision(state: AutonomyRun): AutonomyCompletionDecision {
+	const pendingGateIds = state.gates
+		.filter(
+			(gate) =>
+				gate.status !== "pass" ||
+				gate.attempt !== state.attempt ||
+				gate.artifactRevision !== state.artifactRevision,
+		)
+		.map((gate) => gate.id);
+	return {
+		completed: pendingGateIds.length === 0,
+		failed: false,
+		pendingGateIds,
+	};
+}
+
 export class AutonomyController {
 	private readonly now: () => string;
 	private readonly createId: () => string;
@@ -257,37 +273,71 @@ export class AutonomyController {
 		});
 	}
 
+	async assessCompletion(): Promise<AutonomyCompletionDecision> {
+		return completionDecision(await this.requireMutable("assess completion"));
+	}
+
+	async markSucceeded(): Promise<AutonomyRun> {
+		const state = await this.requireMutable("mark completion");
+		if (!completionDecision(state).completed) {
+			throw new AutonomyTransitionError(
+				"Cannot mark autonomy succeeded without current gate evidence",
+			);
+		}
+		return this.persist({
+			...state,
+			status: "succeeded",
+			updatedAt: this.now(),
+		});
+	}
+
+	async assessContinuation(): Promise<AutonomyCompletionDecision> {
+		const state = await this.requireMutable("assess continuation");
+		return {
+			completed: false,
+			failed: state.attempt >= state.maxAttempts,
+			pendingGateIds: state.gates
+				.filter((gate) => gate.status !== "pass")
+				.map((gate) => gate.id),
+		};
+	}
+
+	async markFailedAtAttemptBound(): Promise<AutonomyRun> {
+		const state = await this.requireMutable("mark attempt-bound failure");
+		if (
+			state.attempt < state.maxAttempts ||
+			completionDecision(state).completed
+		) {
+			throw new AutonomyTransitionError(
+				"Cannot mark autonomy failed before its incomplete attempt bound",
+			);
+		}
+		return this.persist({
+			...state,
+			status: "failed",
+			lastError: `Maximum attempts reached (${state.maxAttempts})`,
+			updatedAt: this.now(),
+		});
+	}
+
 	async evaluateCompletion(
 		_agentCompletionText?: string,
 	): Promise<AutonomyCompletionDecision> {
 		const state = await this.requireMutable("evaluate completion");
-		const pendingGateIds = state.gates
-			.filter(
-				(gate) =>
-					gate.status !== "pass" ||
-					gate.attempt !== state.attempt ||
-					gate.artifactRevision !== state.artifactRevision,
-			)
-			.map((gate) => gate.id);
-		const completed = pendingGateIds.length === 0;
-		const timestamp = this.now();
-		await this.persist({
-			...state,
-			status: completed ? "succeeded" : "waiting",
-			updatedAt: timestamp,
-		});
-		return { completed, failed: false, pendingGateIds };
+		const decision = completionDecision(state);
+		if (!decision.completed) {
+			await this.persist({
+				...state,
+				status: "waiting",
+				updatedAt: this.now(),
+			});
+		}
+		return decision;
 	}
 
 	async continueAfterIncomplete(): Promise<AutonomyCompletionDecision> {
 		const state = await this.requireMutable("continue an incomplete run");
 		if (state.attempt >= state.maxAttempts) {
-			await this.persist({
-				...state,
-				status: "failed",
-				lastError: `Maximum attempts reached (${state.maxAttempts})`,
-				updatedAt: this.now(),
-			});
 			return {
 				completed: false,
 				failed: true,

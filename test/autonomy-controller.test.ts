@@ -169,6 +169,7 @@ describe("AutonomyController", () => {
 			failed: false,
 			pendingGateIds: [],
 		});
+		await controller.markSucceeded();
 		expect((await controller.get())?.status).toBe("succeeded");
 	});
 
@@ -217,6 +218,7 @@ describe("AutonomyController", () => {
 		const decision = await controller.continueAfterIncomplete();
 
 		expect(decision.failed).toBe(true);
+		await controller.markFailedAtAttemptBound();
 		expect((await controller.get())?.status).toBe("failed");
 		await expect(controller.resume()).rejects.toBeInstanceOf(
 			AutonomyTransitionError,
@@ -241,6 +243,7 @@ describe("AutonomyController", () => {
 			});
 		}
 		await controller.evaluateCompletion();
+		await controller.markSucceeded();
 		const replacement = new AutonomyController(store, {
 			now: () => "2026-08-11T13:00:00.000Z",
 			createId: () => "run-2",

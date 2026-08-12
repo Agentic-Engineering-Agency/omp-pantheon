@@ -9,10 +9,12 @@ import type {
 
 import { CommandJournal } from "./journal";
 import {
+	autonomyProjectStateRoot,
 	autonomyRuntimeRoot,
 	prepareAutonomyRuntimeRoot,
 } from "./runtime-paths";
 import { PersistedScheduler } from "./scheduler";
+import { AutonomyStore } from "./store";
 import { AutonomyWorker, OmpSessionExecutor } from "./worker";
 
 const DAEMON_NAME_PREFIX = "pantheon-agentd";
@@ -34,6 +36,12 @@ export interface AgentdStatus {
 	state: string;
 	pid?: number;
 	restartCount: number;
+}
+
+let currentAgentdRunId: string | undefined;
+
+export function isCurrentAgentdRun(runId: string): boolean {
+	return currentAgentdRunId === runId;
 }
 
 export class AutonomyAgentd {
@@ -192,12 +200,23 @@ async function runAgentd(args: string[]): Promise<void> {
 		expectedRunId: runId,
 		expectedCwd: root,
 	});
+	const store = new AutonomyStore(root, {
+		stateDirectory: autonomyProjectStateRoot(root),
+	});
+	currentAgentdRunId = runId;
 	const worker = new AutonomyWorker(
 		journal,
 		new OmpSessionExecutor(),
 		{
 			workerId: `agentd-${process.pid}-${randomUUID()}`,
 			leaseMs: 60_000,
+			shouldStop: async () => {
+				const state = await store.load();
+				return (
+					state?.id === runId &&
+					["paused", "succeeded", "failed", "cancelled"].includes(state.status)
+				);
+			},
 		},
 		new PersistedScheduler(stateRoot, journal),
 	);
@@ -212,6 +231,7 @@ async function runAgentd(args: string[]): Promise<void> {
 		process.off("SIGINT", stop);
 		process.off("SIGTERM", stop);
 		await worker.close();
+		currentAgentdRunId = undefined;
 	}
 }
 
