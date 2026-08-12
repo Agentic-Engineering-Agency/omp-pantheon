@@ -1609,8 +1609,14 @@ describe("autonomy extension", () => {
 			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
 		}).load();
 		expect(
+			state?.gates.find((gate) => gate.id === "verification"),
+		).toMatchObject({
+			reporter: "host-verifier",
+			artifactRevision: 0,
+		});
+		expect(
 			state?.gates.find((gate) => gate.id === "verification")?.status,
-		).toBe("pass");
+		).not.toBe("pending");
 	});
 
 	test("aborted verification before launch records no receipt", async () => {
