@@ -1,3 +1,5 @@
+import { isAbsolute } from "node:path";
+
 import type { AutonomyStore } from "./store";
 import type {
 	AutonomyCompletionDecision,
@@ -125,9 +127,12 @@ export class AutonomyController {
 				"Autonomy verification command must not be empty",
 			);
 		}
-		if (args.ownerSessionFile.trim().length === 0) {
+		if (
+			args.ownerSessionFile.trim().length === 0 ||
+			!isAbsolute(args.ownerSessionFile)
+		) {
 			throw new AutonomyTransitionError(
-				"Autonomy requires a persisted owner session file",
+				"Autonomy requires an absolute persisted owner session file",
 			);
 		}
 		if (args.gates.length === 0) {
@@ -473,21 +478,6 @@ export class AutonomyController {
 			lastError: reason,
 			updatedAt: this.now(),
 		});
-	}
-
-	async evaluateCompletion(
-		_agentCompletionText?: string,
-	): Promise<AutonomyCompletionDecision> {
-		const state = await this.requireMutable("evaluate completion");
-		const decision = completionDecision(state);
-		if (!decision.completed) {
-			await this.persist({
-				...state,
-				status: "waiting",
-				updatedAt: this.now(),
-			});
-		}
-		return decision;
 	}
 
 	async continueAfterIncomplete(

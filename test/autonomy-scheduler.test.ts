@@ -32,7 +32,7 @@ function command(id: string): WorkerCommand {
 		schemaVersion: 1,
 		id,
 		runId: "run-1",
-		cwd: "/tmp/project",
+		cwd: tmpdir(),
 		sessionFile: "/tmp/session.jsonl",
 		prompt: `Continue ${id}`,
 		maxAttempts: 3,
@@ -69,7 +69,7 @@ async function fixture(
 	const journal = new CommandJournal(root, {
 		now: clock,
 		expectedRunId: "run-1",
-		expectedCwd: "/tmp/project",
+		expectedCwd: tmpdir(),
 	});
 	return {
 		root,

@@ -7,6 +7,7 @@ import type {
 	DaemonRpcResult,
 } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 
+import { canonicalProjectRoot } from "../private-state";
 import { AutonomyController } from "./controller";
 import { CommandJournal } from "./journal";
 import {
@@ -276,7 +277,7 @@ function scrubAgentdEnvironment(): void {
 }
 
 async function runAgentd(args: string[]): Promise<void> {
-	const root = resolve(parseRequiredArgument(args, "--root"));
+	const root = canonicalProjectRoot(parseRequiredArgument(args, "--root"));
 	const runId = parseRequiredArgument(args, "--run-id");
 	const stateRoot = resolve(parseRequiredArgument(args, "--state-root"));
 	const expectedStateRoot = resolve(autonomyRuntimeRoot(root, runId));

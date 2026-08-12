@@ -53,6 +53,15 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
   invalidation signals and reset gates from any session. Delayed evidence and
   terminal transitions also carry the captured run ID, so replacement runs
   reject stale receipts.
+- Canonicalized project identity through the filesystem before deriving private
+  state roots, ownership checks, daemon arguments, and journal bounds. Runtime
+  attachment now prepares a complete project context before atomically
+  publishing it, so concurrent project/session switches cannot mix controllers,
+  stores, workers, or owner sessions.
+- Classified every failure after headless prompt dispatch as an uncertain
+  command outcome. Such commands are permanently fenced instead of released
+  for retry, preventing duplicate tool side effects after idle, flush, disposal,
+  heartbeat, receipt, or acknowledgement failures.
 - Added approval-gated refinement and isolated Python skill contracts.
 - Added capability adapters for JSON-only kernel checkpoints and retained
   subagents. Both report unsupported on stock OMP 17.2.14 because the required

@@ -19,11 +19,13 @@ export function resolvedPrivateStateHome(stateHome?: string): string {
 	);
 }
 
+export function canonicalProjectRoot(projectRoot: string): string {
+	return realpathSync(resolve(projectRoot));
+}
+
 export function privateProjectKey(projectRoot: string): string {
-	const resolvedProjectRoot = resolve(projectRoot);
-	const canonicalProjectRoot = realpathSync(resolvedProjectRoot);
 	return createHash("sha256")
-		.update(canonicalProjectRoot)
+		.update(canonicalProjectRoot(projectRoot))
 		.digest("hex")
 		.slice(0, 24);
 }

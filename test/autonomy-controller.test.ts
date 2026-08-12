@@ -103,20 +103,38 @@ describe("AutonomyController", () => {
 		).rejects.toThrow("requirements");
 	});
 
+	test("rejects relative owner session files", async () => {
+		const { controller } = await createHarness();
+
+		await expect(
+			controller.start({
+				task: "Ship verified autonomy",
+				maxAttempts: 1,
+				verificationCommand: "bun test",
+				ownerSessionFile: "session.jsonl",
+				gates: [
+					{
+						id: "verification",
+						label: "Targeted verification",
+						requirement: { kind: "command" },
+					},
+				],
+			}),
+		).rejects.toThrow("absolute persisted owner session");
+	});
+
 	test("never treats model completion text as completion evidence", async () => {
 		const { controller } = await createHarness();
-		await startRun(controller);
+		const started = await startRun(controller);
 
-		const decision = await controller.evaluateCompletion(
-			"<promise>DONE</promise>",
-		);
+		const decision = await controller.assessCompletion(started.id);
 
 		expect(decision).toEqual({
 			completed: false,
 			failed: false,
 			pendingGateIds: ["native-goal", "verification"],
 		});
-		expect((await controller.get())?.status).toBe("waiting");
+		expect((await controller.get())?.status).toBe("running");
 	});
 
 	test("rejects gate evidence while paused", async () => {
@@ -195,7 +213,7 @@ describe("AutonomyController", () => {
 			artifactRevision: 0,
 		});
 
-		expect(await controller.evaluateCompletion("done")).toMatchObject({
+		expect(await controller.assessCompletion("run-1")).toMatchObject({
 			completed: false,
 			pendingGateIds: ["verification"],
 		});
@@ -209,7 +227,7 @@ describe("AutonomyController", () => {
 			artifactRevision: 0,
 		});
 
-		expect(await controller.evaluateCompletion("ignored prose")).toEqual({
+		expect(await controller.assessCompletion("run-1")).toEqual({
 			completed: true,
 			failed: false,
 			pendingGateIds: [],
@@ -287,7 +305,6 @@ describe("AutonomyController", () => {
 				artifactRevision: 0,
 			});
 		}
-		await controller.evaluateCompletion();
 		await controller.markSucceeded();
 		const replacement = new AutonomyController(store, {
 			now: () => "2026-08-11T13:00:00.000Z",
@@ -456,6 +473,15 @@ describe("AutonomyStore", () => {
 		};
 
 		await expect(store.save(forged, 1)).rejects.toThrow("gate record");
+	});
+
+	test("rejects persisted relative owner session files", async () => {
+		const { controller, store } = await createHarness();
+		const started = await startRun(controller);
+
+		await expect(
+			store.save({ ...started, ownerSessionFile: "session.jsonl" }, 1),
+		).rejects.toThrow("invalid shape");
 	});
 
 	test("rejects malformed resident terminal intents", async () => {

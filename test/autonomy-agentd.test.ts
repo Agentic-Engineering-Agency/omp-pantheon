@@ -19,6 +19,7 @@ import { AutonomyStore } from "../extensions/oh-my-omp/autonomy/store";
 import {
 	AutonomyWorker,
 	type CommandExecutor,
+	CommandPersistenceUncertainError,
 	OmpSessionExecutor,
 } from "../extensions/oh-my-omp/autonomy/worker";
 
@@ -29,7 +30,7 @@ function command(id = "command-1"): WorkerCommand {
 		schemaVersion: 1,
 		id,
 		runId: "run-1",
-		cwd: "/tmp/project",
+		cwd: tmpdir(),
 		sessionFile: "/tmp/session.jsonl",
 		prompt: "Continue the verified goal.",
 		maxAttempts: 3,
@@ -46,7 +47,7 @@ async function createJournal() {
 		journal: new CommandJournal(root, {
 			now: () => now,
 			expectedRunId: "run-1",
-			expectedCwd: "/tmp/project",
+			expectedCwd: tmpdir(),
 		}),
 		setNow(value: string) {
 			now = Date.parse(value);
@@ -154,15 +155,18 @@ describe("CommandJournal", () => {
 		});
 		expect(acknowledged.status).toBe("acknowledged");
 	});
-
 	test("rejects commands outside the bound run and project", async () => {
 		const { journal } = await createJournal();
+		const otherProject = await mkdtemp(
+			join(tmpdir(), "pantheon-other-project-"),
+		);
+		roots.push(otherProject);
 
 		await expect(
 			journal.enqueue({ ...command(), runId: "other-run" }),
 		).rejects.toThrow("invalid shape");
 		await expect(
-			journal.enqueue({ ...command(), cwd: "/tmp/other-project" }),
+			journal.enqueue({ ...command(), cwd: otherProject }),
 		).rejects.toThrow("invalid shape");
 	});
 });
@@ -402,10 +406,9 @@ describe("AutonomyWorker", () => {
 
 	test("renews leases while execution is active", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pantheon-agentd-heartbeat-"));
-		roots.push(root);
 		const journal = new CommandJournal(root, {
 			expectedRunId: "run-1",
-			expectedCwd: "/tmp/project",
+			expectedCwd: tmpdir(),
 		});
 		await journal.enqueue(command());
 		const executor: CommandExecutor = {
@@ -511,11 +514,47 @@ describe("OMP session and broker adapters", () => {
 		});
 		expect(calls).toEqual([
 			"open:/tmp/session.jsonl",
-			"prompt:/tmp/project:Continue the verified goal.",
+			`prompt:${tmpdir()}:Continue the verified goal.`,
 			"idle",
 			"flush",
 			"dispose",
 		]);
+	});
+
+	test("fences post-prompt persistence failures without replay", async () => {
+		const { journal } = await createJournal();
+		await journal.enqueue(command());
+		let prompts = 0;
+		const executor = new OmpSessionExecutor({
+			openSessionManager: async (sessionFile) => ({ sessionFile }),
+			createSession: async ({ sessionManager }) => ({
+				sessionId: "session-1",
+				sessionFile: sessionManager.sessionFile,
+				async prompt() {
+					prompts += 1;
+				},
+				async waitForIdle() {},
+				async flush() {
+					throw new Error("flush failed");
+				},
+				async dispose() {},
+			}),
+		});
+		const worker = new AutonomyWorker(journal, executor, {
+			workerId: "worker-a",
+			leaseMs: 5_000,
+		});
+
+		await expect(worker.runOnce()).rejects.toBeInstanceOf(
+			CommandPersistenceUncertainError,
+		);
+		expect((await journal.list())[0]).toMatchObject({
+			status: "uncertain",
+			lastError:
+				"OMP session execution may have produced side effects before persistence",
+		});
+		expect(await worker.runOnce()).toBe(false);
+		expect(prompts).toBe(1);
 	});
 
 	test("launches through the OMP broker and exposes status and stop", async () => {
@@ -533,7 +572,7 @@ describe("OMP session and broker adapters", () => {
 			},
 			close() {},
 		};
-		const agentd = new AutonomyAgentd("/tmp/project", {
+		const agentd = new AutonomyAgentd(tmpdir(), {
 			broker,
 			entrypoint: "/tmp/agentd.ts",
 			executable: "/usr/bin/bun",

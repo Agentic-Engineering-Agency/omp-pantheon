@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 import { acquireFileLock } from "../file-lock";
 import {
@@ -225,6 +225,7 @@ export class AutonomyStore {
 			state.verificationCommand.trim().length === 0 ||
 			typeof state.ownerSessionFile !== "string" ||
 			state.ownerSessionFile.trim().length === 0 ||
+			!isAbsolute(state.ownerSessionFile) ||
 			!Number.isFinite(Date.parse(state.createdAt)) ||
 			!Number.isFinite(Date.parse(state.updatedAt)) ||
 			(state.nativeGoalId !== undefined &&

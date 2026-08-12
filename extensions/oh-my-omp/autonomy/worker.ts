@@ -68,6 +68,12 @@ const defaultSessionAdapter: OmpSessionAdapter = {
 		};
 	},
 };
+export class CommandPersistenceUncertainError extends Error {
+	constructor(message: string, options?: ErrorOptions) {
+		super(message, options);
+		this.name = "CommandPersistenceUncertainError";
+	}
+}
 
 export class OmpSessionExecutor implements CommandExecutor {
 	readonly #adapter: OmpSessionAdapter;
@@ -96,20 +102,45 @@ export class OmpSessionExecutor implements CommandExecutor {
 			void session.dispose();
 		};
 		signal.addEventListener("abort", abort, { once: true });
+		let promptDispatched = false;
+		let receipt: CommandPersistenceReceipt | undefined;
+		let failure: unknown;
 		try {
+			promptDispatched = true;
 			await session.prompt(command.prompt);
 			await session.waitForIdle();
 			await session.flush();
-			return {
+			receipt = {
 				sessionId: session.sessionId,
 				sessionFile: session.sessionFile,
 				persistedAt: this.#adapter.now?.() ?? new Date().toISOString(),
 			};
+		} catch (error) {
+			failure = promptDispatched
+				? new CommandPersistenceUncertainError(
+						"OMP session execution may have produced side effects before persistence",
+						{ cause: error },
+					)
+				: error;
 		} finally {
 			signal.removeEventListener("abort", abort);
 			this.#activeSessions.delete(session);
-			await session.dispose();
+			try {
+				await session.dispose();
+			} catch (error) {
+				failure ??= promptDispatched
+					? new CommandPersistenceUncertainError(
+							"OMP session execution may have produced side effects before disposal",
+							{ cause: error },
+						)
+					: error;
+			}
 		}
+		if (failure !== undefined) throw failure;
+		if (receipt === undefined) {
+			throw new Error("OMP session execution produced no persistence receipt");
+		}
+		return receipt;
 	}
 
 	async close(): Promise<void> {
@@ -193,12 +224,26 @@ export class AutonomyWorker {
 			} catch (error) {
 				await renewing;
 				const failure = heartbeatFailure ?? error;
-				await this.journal.release(
-					claimed.command.id,
-					this.options.workerId,
-					claimed.fencingToken,
-					failure instanceof Error ? failure.message : String(failure),
-				);
+				const message =
+					failure instanceof Error ? failure.message : String(failure);
+				if (
+					heartbeatFailure !== undefined ||
+					error instanceof CommandPersistenceUncertainError
+				) {
+					await this.journal.markUncertain(
+						claimed.command.id,
+						this.options.workerId,
+						claimed.fencingToken,
+						message,
+					);
+				} else {
+					await this.journal.release(
+						claimed.command.id,
+						this.options.workerId,
+						claimed.fencingToken,
+						message,
+					);
+				}
 				throw failure;
 			}
 			await renewing;

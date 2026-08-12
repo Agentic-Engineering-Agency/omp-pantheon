@@ -8,6 +8,7 @@ import type {
 	ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
 
+import { canonicalProjectRoot } from "../private-state";
 import {
 	type AgentdStatus,
 	AutonomyAgentd,
@@ -90,6 +91,7 @@ export interface AutonomyRuntimeOptions {
 	now?: () => string;
 	isResidentWorker?: (runId: string) => boolean;
 	residentCommandId?: (runId: string) => string | undefined;
+	prepareProjectStateRoot?: typeof prepareAutonomyProjectStateRoot;
 }
 
 export class AutonomyRuntime {
@@ -97,8 +99,8 @@ export class AutonomyRuntime {
 	private store: AutonomyStore | null = null;
 	private agentd: AgentdClient | null = null;
 	private cwd: string | null = null;
-	private sessionFile: string | null = null;
 	private stateHome: string | undefined;
+	private attachmentGeneration = 0;
 
 	constructor(
 		private readonly pi: ExtensionAPI,
@@ -110,42 +112,60 @@ export class AutonomyRuntime {
 		ctx: Pick<ExtensionContext, "cwd"> &
 			Partial<Pick<ExtensionContext, "sessionManager">>,
 	): Promise<void> {
-		const resolvedCwd = resolve(ctx.cwd);
-		const sessionFile = ctx.sessionManager?.getSessionFile() ?? null;
-		if (this.cwd === resolvedCwd && this.controller !== null) {
-			this.sessionFile = sessionFile === null ? null : resolve(sessionFile);
+		const resolvedCwd = canonicalProjectRoot(ctx.cwd);
+		if (
+			this.cwd === resolvedCwd &&
+			this.controller !== null &&
+			(this.agentd !== null || ctx.sessionManager === undefined)
+		) {
 			return;
 		}
-		this.agentd?.close();
-		this.cwd = resolvedCwd;
-		this.sessionFile = sessionFile === null ? null : resolve(sessionFile);
-		this.stateHome =
+
+		const generation = ++this.attachmentGeneration;
+		const stateHome =
 			typeof this.options.stateHome === "function"
-				? this.options.stateHome(this.cwd)
+				? this.options.stateHome(resolvedCwd)
 				: this.options.stateHome;
+		const prepareProjectStateRoot =
+			this.options.prepareProjectStateRoot ?? prepareAutonomyProjectStateRoot;
 		const stateDirectory =
-			ctx.sessionManager === undefined && this.stateHome === undefined
+			ctx.sessionManager === undefined && stateHome === undefined
 				? undefined
-				: await prepareAutonomyProjectStateRoot(this.cwd, this.stateHome);
-		this.store = new AutonomyStore(this.cwd, { stateDirectory });
-		this.controller = new AutonomyController(this.store);
-		this.agentd =
+				: await prepareProjectStateRoot(resolvedCwd, stateHome);
+		const store = new AutonomyStore(resolvedCwd, { stateDirectory });
+		const controller = new AutonomyController(store);
+		const agentd =
 			ctx.sessionManager === undefined
 				? null
-				: (this.options.agentdFactory?.(this.cwd, this.stateHome) ??
-					new AutonomyAgentd(this.cwd, { stateHome: this.stateHome }));
-		const state = await this.controller.get();
+				: (this.options.agentdFactory?.(resolvedCwd, stateHome) ??
+					new AutonomyAgentd(resolvedCwd, { stateHome }));
+		const state = await controller.get();
 		if (state !== null && ACTIVE_STATUSES[state.status] === true) {
-			await this.agentd?.start(state.id);
+			await agentd?.start(state.id);
 		}
+		if (generation !== this.attachmentGeneration) {
+			agentd?.close();
+			return;
+		}
+
+		const previousAgentd = this.agentd;
+		this.cwd = resolvedCwd;
+		this.stateHome = stateHome;
+		this.store = store;
+		this.controller = controller;
+		this.agentd = agentd;
+		previousAgentd?.close();
 	}
 
 	async start(
 		task: string,
 		maxAttempts: number,
 		verificationCommand: string,
+		ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,
 	): Promise<AutonomyRun> {
-		if (this.sessionFile === null) {
+		this.requireRunProject(ctx);
+		const sessionFile = ctx.sessionManager?.getSessionFile();
+		if (sessionFile === undefined) {
 			throw new AutonomyTransitionError(
 				"Autonomy requires a persisted OMP session; --no-session is unsupported",
 			);
@@ -159,16 +179,20 @@ export class AutonomyRuntime {
 				this.stateHome,
 				this.options.now?.() ?? new Date().toISOString(),
 			),
-			ownerSessionFile: this.sessionFile,
+			ownerSessionFile: resolve(sessionFile),
 		});
 		await this.agentd?.start(state.id);
 		return state;
 	}
 
-	async get(): Promise<AutonomyRun | null> {
+	async get(ctx: Pick<ExtensionContext, "cwd">): Promise<AutonomyRun | null> {
+		this.requireRunProject(ctx);
 		return (await this.requireController()).get();
 	}
-	async getWorkerStatus(): Promise<AgentdStatus | null> {
+	async getWorkerStatus(
+		ctx: Pick<ExtensionContext, "cwd">,
+	): Promise<AgentdStatus | null> {
+		this.requireRunProject(ctx);
 		if (!this.agentd) return null;
 		const state = await (await this.requireController()).get();
 		if (state === null) return null;
@@ -179,7 +203,8 @@ export class AutonomyRuntime {
 		}
 	}
 
-	async pause(): Promise<AutonomyRun> {
+	async pause(ctx: Pick<ExtensionContext, "cwd">): Promise<AutonomyRun> {
+		this.requireRunProject(ctx);
 		const controller = await this.requireController();
 		const state = await controller.get();
 		if (state === null) {
@@ -205,7 +230,8 @@ export class AutonomyRuntime {
 		return controller.pause(state.id);
 	}
 
-	async resume(): Promise<AutonomyRun> {
+	async resume(ctx: Pick<ExtensionContext, "cwd">): Promise<AutonomyRun> {
+		this.requireRunProject(ctx);
 		const state = await (await this.requireController()).resume();
 		await this.agentd?.start(state.id);
 		await this.scheduleContinuation(
@@ -217,7 +243,8 @@ export class AutonomyRuntime {
 		return state;
 	}
 
-	async cancel(): Promise<AutonomyRun> {
+	async cancel(ctx: Pick<ExtensionContext, "cwd">): Promise<AutonomyRun> {
+		this.requireRunProject(ctx);
 		const controller = await this.requireController();
 		const state = await controller.get();
 		if (state === null) {
@@ -241,8 +268,9 @@ export class AutonomyRuntime {
 
 	async runVerification(
 		signal: AbortSignal | undefined,
-		ctx: Pick<ExtensionContext, "sessionManager">,
+		ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,
 	): Promise<AutonomyRun> {
+		this.requireRunProject(ctx);
 		const controller = await this.requireController();
 		const state = await controller.get();
 		if (state === null) {
@@ -533,7 +561,15 @@ export class AutonomyRuntime {
 	}
 
 	private ownsRunProject(ctx: Pick<ExtensionContext, "cwd">): boolean {
-		return this.cwd !== null && resolve(ctx.cwd) === this.cwd;
+		return this.cwd !== null && canonicalProjectRoot(ctx.cwd) === this.cwd;
+	}
+
+	private requireRunProject(ctx: Pick<ExtensionContext, "cwd">): void {
+		if (!this.ownsRunProject(ctx)) {
+			throw new AutonomyTransitionError(
+				"Autonomy runtime context changed while the operation was pending",
+			);
+		}
 	}
 
 	private ownsRunSession(

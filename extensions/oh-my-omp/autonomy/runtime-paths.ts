@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { ensurePrivateDirectory } from "../private-files";
+import { privateProjectKey } from "../private-state";
 
 function resolvedStateHome(stateHome?: string): string {
 	return resolve(
@@ -12,19 +12,12 @@ function resolvedStateHome(stateHome?: string): string {
 	);
 }
 
-function projectKey(projectRoot: string): string {
-	return createHash("sha256")
-		.update(resolve(projectRoot))
-		.digest("hex")
-		.slice(0, 24);
-}
-
 function autonomyProjectRoot(projectRoot: string, stateHome?: string): string {
 	return join(
 		resolvedStateHome(stateHome),
 		"omp-pantheon",
 		"autonomy",
-		projectKey(projectRoot),
+		privateProjectKey(projectRoot),
 	);
 }
 

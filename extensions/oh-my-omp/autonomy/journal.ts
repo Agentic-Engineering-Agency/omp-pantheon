@@ -8,6 +8,7 @@ import { appendPrivateFile, ensurePrivateDirectory } from "../private-files";
 const JOURNAL_FILE = "commands.jsonl";
 const LOCK_FILE = "commands.lock";
 
+import { canonicalProjectRoot } from "../private-state";
 export interface WorkerCommand {
 	schemaVersion: 1;
 	id: string;
@@ -98,7 +99,7 @@ export class CommandJournal {
 		this.#expectedCwd =
 			options.expectedCwd === undefined
 				? undefined
-				: resolve(options.expectedCwd);
+				: canonicalProjectRoot(options.expectedCwd);
 	}
 
 	async enqueue(command: WorkerCommand): Promise<CommandRecord> {
@@ -555,7 +556,7 @@ export class CommandJournal {
 			(this.#expectedRunId !== undefined &&
 				command.runId !== this.#expectedRunId) ||
 			(this.#expectedCwd !== undefined &&
-				resolve(command.cwd) !== this.#expectedCwd)
+				canonicalProjectRoot(command.cwd) !== this.#expectedCwd)
 		) {
 			throw new CommandJournalError("Worker command has an invalid shape");
 		}

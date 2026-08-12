@@ -1,4 +1,12 @@
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	realpath,
+	rm,
+	stat,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,10 +18,12 @@ import { registerAutonomy } from "../extensions/oh-my-omp/autonomy/runtime";
 import {
 	autonomyProjectStateRoot,
 	autonomyRuntimeRoot,
+	prepareAutonomyProjectStateRoot,
 } from "../extensions/oh-my-omp/autonomy/runtime-paths";
 import { PersistedScheduler } from "../extensions/oh-my-omp/autonomy/scheduler";
 import { AutonomyStore } from "../extensions/oh-my-omp/autonomy/store";
 import registerPantheon from "../extensions/oh-my-omp/index";
+import { canonicalProjectRoot } from "../extensions/oh-my-omp/private-state";
 import { writeSpecSafeClosureReceipt } from "../extensions/oh-my-omp/specsafe-receipts";
 import { writeEvalFlyEnforcementState } from "../skills/evalfly/bin/enforcement-state";
 
@@ -570,6 +580,170 @@ describe("autonomy extension", () => {
 			nativeGoalId: "owner-goal",
 			ownerSessionFile: ownerSession,
 		});
+	});
+
+	test("keeps the previous project active until attachment commits", async () => {
+		const projectA = await mkdtemp(join(tmpdir(), "pantheon-attach-a-"));
+		const projectB = await mkdtemp(join(tmpdir(), "pantheon-attach-b-"));
+		const stateHome = await mkdtemp(join(tmpdir(), "pantheon-attach-state-"));
+		roots.push(projectA, projectB, stateHome);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let runtime: ReturnType<typeof registerAutonomy> | undefined;
+		const extension = await createFakeExtension(
+			(pi) => {
+				runtime = registerAutonomy(
+					pi,
+					{
+						async verify() {
+							return { status: "pass", evidence: "exit:0" };
+						},
+					},
+					{
+						stateHome,
+						async prepareProjectStateRoot(cwd, home) {
+							if (cwd === canonicalProjectRoot(projectB)) {
+								entered.resolve();
+								await release.promise;
+							}
+							return prepareAutonomyProjectStateRoot(cwd, home);
+						},
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				);
+			},
+			{ cwd: projectA, sessionFile: join(projectA, "session.jsonl") },
+		);
+		if (runtime === undefined) throw new Error("Expected autonomy runtime");
+		await extension.commands.autonomy?.handler(
+			'start "Atomic attachment objective" --max-attempts=2',
+			extension.ctx,
+		);
+		const storeA = new AutonomyStore(projectA, {
+			stateDirectory: autonomyProjectStateRoot(projectA, stateHome),
+		});
+		const before = await storeA.load();
+		const projectBCtx: FakeContext = {
+			...extension.ctx,
+			cwd: projectB,
+			sessionManager: {
+				getSessionFile: () => join(projectB, "session.jsonl"),
+			},
+		};
+
+		const attaching = runtime.attach(projectBCtx as never);
+		await entered.promise;
+		await runtime.onToolResult(
+			{
+				toolCallId: "project-b-write",
+				toolName: "write",
+				input: { path: "b.txt" },
+				isError: false,
+			} as never,
+			{ cwd: projectB },
+		);
+		expect(await storeA.load()).toEqual(before);
+		release.resolve();
+		await attaching;
+		expect(await runtime.get(projectBCtx)).toBeNull();
+	});
+
+	test("canonicalizes symlinked project aliases before ownership checks", async () => {
+		const container = await mkdtemp(join(tmpdir(), "pantheon-project-alias-"));
+		const project = join(container, "project");
+		const alias = join(container, "alias");
+		const stateHome = await mkdtemp(join(tmpdir(), "pantheon-alias-state-"));
+		await mkdir(project);
+		await symlink(project, alias);
+		roots.push(container, stateHome);
+		const ownerSession = join(project, "owner.jsonl");
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify() {
+							return { status: "pass", evidence: "exit:0" };
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd: project, sessionFile: ownerSession },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Canonical project objective" --max-attempts=2',
+			extension.ctx,
+		);
+		const aliasCtx: FakeContext = {
+			...extension.ctx,
+			cwd: alias,
+			sessionManager: {
+				getSessionFile: () => join(project, "other.jsonl"),
+			},
+		};
+		await extension.handlers.session_switch?.[0]?.({}, aliasCtx);
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "alias-goal",
+					objective: "Canonical project objective",
+					status: "active",
+				},
+			},
+			aliasCtx,
+		);
+		await extension.handlers.tool_result?.[0]?.(
+			{
+				toolCallId: "alias-write",
+				toolName: "write",
+				input: { path: "alias.txt" },
+				isError: false,
+			},
+			aliasCtx,
+		);
+
+		const canonical = await realpath(project);
+		expect(autonomyProjectStateRoot(project, stateHome)).toBe(
+			autonomyProjectStateRoot(alias, stateHome),
+		);
+		const store = new AutonomyStore(canonical, {
+			stateDirectory: autonomyProjectStateRoot(canonical, stateHome),
+		});
+		const state = await store.load();
+		expect(state).toMatchObject({
+			artifactRevision: 1,
+			ownerSessionFile: ownerSession,
+		});
+		expect(state?.nativeGoalId).toBeUndefined();
+		if (state === null) throw new Error("Expected aliased autonomy run");
+		expect(autonomyRuntimeRoot(project, state.id, stateHome)).toBe(
+			autonomyRuntimeRoot(alias, state.id, stateHome),
+		);
 	});
 
 	test("rejects stale verification evidence after run replacement", async () => {
@@ -2175,7 +2349,7 @@ describe("autonomy extension", () => {
 		expect(schedules).toHaveLength(1);
 		expect(schedules[0]?.request.command).toMatchObject({
 			runId: state.id,
-			cwd,
+			cwd: canonicalProjectRoot(cwd),
 			sessionFile,
 			maxAttempts: 3,
 		});

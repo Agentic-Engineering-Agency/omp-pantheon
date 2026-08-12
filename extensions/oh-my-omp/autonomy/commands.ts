@@ -84,6 +84,7 @@ export function registerAutonomyCommands(
 							parsed.task,
 							parsed.maxAttempts ?? 25,
 							parsed.verificationCommand ?? "bun test",
+							ctx,
 						);
 						pi.sendUserMessage(
 							[
@@ -99,8 +100,8 @@ export function registerAutonomyCommands(
 					}
 					case "status": {
 						const [state, worker] = await Promise.all([
-							runtime.get(),
-							runtime.getWorkerStatus(),
+							runtime.get(ctx),
+							runtime.getWorkerStatus(ctx),
 						]);
 						ctx.ui.notify(
 							state === null
@@ -111,15 +112,15 @@ export function registerAutonomyCommands(
 						return;
 					}
 					case "pause":
-						await runtime.pause();
+						await runtime.pause(ctx);
 						ctx.ui.notify("Autonomy paused.", "info");
 						return;
 					case "resume":
-						await runtime.resume();
+						await runtime.resume(ctx);
 						ctx.ui.notify("Autonomy resumed.", "info");
 						return;
 					case "cancel":
-						await runtime.cancel();
+						await runtime.cancel(ctx);
 						ctx.ui.notify("Autonomy cancelled.", "info");
 						return;
 					case "explain":
