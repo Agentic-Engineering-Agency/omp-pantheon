@@ -154,6 +154,7 @@ export class AutonomyRuntime {
 				this.stateHome,
 				this.options.now?.() ?? new Date().toISOString(),
 			),
+			ownerSessionFile: this.sessionFile ?? undefined,
 		});
 		await this.agentd?.start(state.id);
 		return state;
@@ -179,7 +180,8 @@ export class AutonomyRuntime {
 		if (state === null) {
 			throw new AutonomyTransitionError("No autonomy run exists");
 		}
-		if (ACTIVE_STATUSES[state.status] !== true && state.status !== "paused") {
+		if (state.status === "paused") return controller.pause(state.id);
+		if (ACTIVE_STATUSES[state.status] !== true) {
 			return controller.pause(state.id);
 		}
 		if (await this.requestResidentTerminal(controller, state.id, "paused")) {
@@ -248,19 +250,27 @@ export class AutonomyRuntime {
 				`Cannot verify autonomy while terminal transition for command ${state.terminalIntent.commandId} is pending`,
 			);
 		}
+		if (!this.ownsRunSession(state)) {
+			throw new AutonomyTransitionError(
+				"Cannot verify autonomy from a session that does not own the run",
+			);
+		}
 		const receipt = await this.verifier.verify(
 			this.cwd ?? "",
 			state.verificationCommand,
 			signal,
 		);
-		return controller.recordGate({
-			gateId: "verification",
-			status: receipt.status,
-			evidence: receipt.evidence,
-			reporter: "host-verifier",
-			attempt: state.attempt,
-			artifactRevision: state.artifactRevision,
-		});
+		return controller.recordGate(
+			{
+				gateId: "verification",
+				status: receipt.status,
+				evidence: receipt.evidence,
+				reporter: "host-verifier",
+				attempt: state.attempt,
+				artifactRevision: state.artifactRevision,
+			},
+			state.id,
+		);
 	}
 
 	async onGoalUpdated(event: NativeGoalUpdatedEvent): Promise<void> {
@@ -275,15 +285,19 @@ export class AutonomyRuntime {
 		) {
 			return;
 		}
+		if (!this.ownsRunSession(state)) return;
 		if (state.nativeGoalId === undefined) {
 			if (
 				event.goal.status === "active" &&
 				event.goal.objective.trim() === state.task
 			) {
-				await controller.bindNativeGoal({
-					id: event.goal.id,
-					objective: event.goal.objective,
-				});
+				await controller.bindNativeGoal(
+					{
+						id: event.goal.id,
+						objective: event.goal.objective,
+					},
+					state.id,
+				);
 			}
 			return;
 		}
@@ -293,14 +307,17 @@ export class AutonomyRuntime {
 		) {
 			return;
 		}
-		await controller.recordGate({
-			gateId: "native-goal",
-			status: "pass",
-			evidence: `goal:${event.goal.id}:complete`,
-			reporter: "native-goal-event",
-			attempt: state.attempt,
-			artifactRevision: state.artifactRevision,
-		});
+		await controller.recordGate(
+			{
+				gateId: "native-goal",
+				status: "pass",
+				evidence: `goal:${event.goal.id}:complete`,
+				reporter: "native-goal-event",
+				attempt: state.attempt,
+				artifactRevision: state.artifactRevision,
+			},
+			state.id,
+		);
 	}
 
 	async onToolResult(event: ToolResultEvent): Promise<void> {
@@ -317,10 +334,12 @@ export class AutonomyRuntime {
 		) {
 			return;
 		}
+		if (!this.ownsRunSession(state)) return;
 		if (state.terminalIntent !== undefined) {
 			await controller.failTerminalIntent(
 				state.terminalIntent.commandId,
 				`Artifact mutation ${event.toolName} occurred while terminal persistence was pending`,
+				state.id,
 			);
 			return;
 		}
@@ -336,6 +355,7 @@ export class AutonomyRuntime {
 			.digest("hex");
 		await controller.recordArtifactRevision(
 			`tool:${event.toolName}:${evidence}`,
+			state.id,
 		);
 	}
 
@@ -343,6 +363,7 @@ export class AutonomyRuntime {
 		const controller = await this.requireController();
 		const state = await controller.get();
 		if (state === null || ACTIVE_STATUSES[state.status] !== true) return;
+		if (!this.ownsRunSession(state)) return;
 		if (state.terminalIntent !== undefined) {
 			this.pi.logger.debug(
 				`Autonomy terminal transition for command ${state.terminalIntent.commandId} remains pending`,
@@ -355,13 +376,16 @@ export class AutonomyRuntime {
 			state,
 			this.stateHome,
 		)) {
-			await controller.recordGate({
-				...receipt,
-				attempt: state.attempt,
-				artifactRevision: state.artifactRevision,
-			});
+			await controller.recordGate(
+				{
+					...receipt,
+					attempt: state.attempt,
+					artifactRevision: state.artifactRevision,
+				},
+				state.id,
+			);
 		}
-		const decision = await controller.assessCompletion();
+		const decision = await controller.assessCompletion(state.id);
 		if (decision.completed) {
 			if (
 				await this.requestResidentTerminal(controller, state.id, "succeeded")
@@ -396,7 +420,7 @@ export class AutonomyRuntime {
 			);
 			return;
 		}
-		const continuation = await controller.assessContinuation();
+		const continuation = await controller.assessContinuation(state.id);
 		if (continuation.failed) {
 			if (await this.requestResidentTerminal(controller, state.id, "failed")) {
 				this.pi.logger.debug(
@@ -427,11 +451,12 @@ export class AutonomyRuntime {
 			this.pi.logger.warn("Autonomy run failed at its maximum attempt bound");
 			return;
 		}
-		const nextContinuation = await controller.continueAfterIncomplete();
-		const next = await controller.get();
-		if (next === null) {
-			throw new Error("Autonomy state disappeared before continuation");
-		}
+		const nextContinuation = await controller.continueAfterIncomplete(state.id);
+		const next = await this.requireRun(
+			controller,
+			state.id,
+			"schedule a continuation",
+		);
 		await this.scheduleContinuation(next, nextContinuation.pendingGateIds);
 	}
 
@@ -481,12 +506,19 @@ export class AutonomyRuntime {
 				id: `command-${suffix}`,
 				runId: state.id,
 				cwd: this.cwd,
-				sessionFile: this.sessionFile,
+				sessionFile: state.ownerSessionFile ?? this.sessionFile,
 				prompt: this.continuationPrompt(pendingGateIds),
 				maxAttempts: 3,
 				createdAt: now,
 			},
 		});
+	}
+
+	private ownsRunSession(state: AutonomyRun): boolean {
+		return (
+			state.ownerSessionFile === undefined ||
+			state.ownerSessionFile === this.sessionFile
+		);
 	}
 
 	private continuationPrompt(pendingGateIds: string[]): string {
@@ -520,7 +552,7 @@ export class AutonomyRuntime {
 				"Resident autonomy transition has no active command",
 			);
 		}
-		await controller.requestTerminalIntent(status, commandId);
+		await controller.requestTerminalIntent(status, commandId, runId);
 		return true;
 	}
 

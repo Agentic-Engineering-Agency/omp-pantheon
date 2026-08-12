@@ -109,7 +109,10 @@ export async function reconcileResidentTerminal(
 	);
 	const controller = new AutonomyController(store);
 	if (record?.status === "acknowledged") {
-		const finalized = await controller.finalizeTerminalIntent(intent.commandId);
+		const finalized = await controller.finalizeTerminalIntent(
+			intent.commandId,
+			runId,
+		);
 		return ["paused", "succeeded", "failed", "cancelled"].includes(
 			finalized.status,
 		);
@@ -127,6 +130,7 @@ export async function reconcileResidentTerminal(
 		record === undefined
 			? "Terminal transition command is missing from the journal"
 			: `Terminal transition persistence is ${record.status}: ${record.lastError ?? "command was not durably acknowledged"}`,
+		runId,
 	);
 	return true;
 }

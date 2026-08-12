@@ -275,6 +275,217 @@ describe("autonomy extension", () => {
 		);
 	});
 
+	test("binds evidence and continuation to the owning session", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-owner-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-owner-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const ownerSession = join(cwd, "owner.jsonl");
+		const otherSession = join(cwd, "other.jsonl");
+		const owner = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile: ownerSession },
+		);
+		await owner.commands.autonomy?.handler(
+			'start "Own this session" --max-attempts=2',
+			owner.ctx,
+		);
+		const other = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile: otherSession },
+		);
+		const store = new AutonomyStore(cwd, {
+			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+		});
+		const before = await store.load();
+		if (before === null) throw new Error("Expected owned autonomy run");
+
+		await other.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "other-goal",
+					objective: "Own this session",
+					status: "active",
+				},
+			},
+			other.ctx,
+		);
+		await other.handlers.tool_result?.[0]?.(
+			{
+				toolCallId: "other-write",
+				toolName: "write",
+				input: { path: "other.txt" },
+				isError: false,
+			},
+			other.ctx,
+		);
+		await other.handlers.agent_end?.[0]?.({ messages: [] }, other.ctx);
+		await expect(
+			other.tools.autonomy_gate?.execute(
+				"other-verification",
+				{},
+				undefined,
+				undefined,
+				other.ctx,
+			),
+		).rejects.toThrow("does not own");
+
+		expect(await store.load()).toEqual(before);
+
+		await owner.handlers.agent_end?.[0]?.({ messages: [] }, owner.ctx);
+		const advanced = await store.load();
+		if (advanced === null) throw new Error("Expected advanced autonomy run");
+		expect(advanced).toMatchObject({
+			ownerSessionFile: ownerSession,
+			attempt: 2,
+		});
+		const root = autonomyRuntimeRoot(cwd, advanced.id, stateHome);
+		const commandJournal = new CommandJournal(root, {
+			expectedRunId: advanced.id,
+			expectedCwd: cwd,
+		});
+		const scheduler = new PersistedScheduler(root, commandJournal);
+		expect((await scheduler.list())[0]?.request.command.sessionFile).toBe(
+			ownerSession,
+		);
+	});
+
+	test("rejects stale verification evidence after run replacement", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-verify-race-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-verify-race-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const sessionFile = join(cwd, "session.jsonl");
+		let resolveVerification:
+			| ((receipt: { status: "pass"; evidence: string }) => void)
+			| undefined;
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify() {
+							return await new Promise((resolve) => {
+								resolveVerification = resolve;
+							});
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Verify run one" --max-attempts=2',
+			extension.ctx,
+		);
+		const verification = extension.tools.autonomy_gate?.execute(
+			"racing-verification",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		const store = new AutonomyStore(cwd, {
+			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+		});
+		const controller = new AutonomyController(store);
+		const original = await controller.get();
+		if (original === null) throw new Error("Expected original run");
+		await controller.cancel(original.id);
+		await new AutonomyController(store, {
+			createId: () => "replacement-verification-run",
+		}).start({
+			task: "Replacement verification run",
+			maxAttempts: 2,
+			verificationCommand: "bun test",
+			ownerSessionFile: sessionFile,
+			gates: [
+				{
+					id: "verification",
+					label: "Targeted verification",
+					requirement: { kind: "command" },
+				},
+			],
+		});
+		resolveVerification?.({
+			status: "pass",
+			evidence: "command:stale:exit:0",
+		});
+		await expect(verification).rejects.toThrow("autonomy run changed");
+		expect(
+			(await store.load())?.gates.find((gate) => gate.id === "verification")
+				?.status,
+		).toBe("pending");
+	});
+
 	test("records passing EvalFly enforcement through a host gate adapter", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-evalfly-"));
 		roots.push(cwd);

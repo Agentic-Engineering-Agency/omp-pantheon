@@ -162,6 +162,7 @@ export class AutonomyController {
 			attempt: 1,
 			maxAttempts: args.maxAttempts,
 			verificationCommand: args.verificationCommand.trim(),
+			ownerSessionFile: args.ownerSessionFile,
 			artifactRevision: 0,
 			gates: args.gates.map((gate) => ({
 				...gate,
@@ -176,11 +177,18 @@ export class AutonomyController {
 		return state;
 	}
 
-	async bindNativeGoal(goal: {
-		id: string;
-		objective: string;
-	}): Promise<AutonomyRun> {
-		const state = await this.requireMutable("bind a native goal");
+	async bindNativeGoal(
+		goal: {
+			id: string;
+			objective: string;
+		},
+		expectedRunId?: string,
+	): Promise<AutonomyRun> {
+		const state = await this.requireMutable(
+			"bind a native goal",
+			false,
+			expectedRunId,
+		);
 		if (goal.id.trim().length === 0 || goal.objective.trim() !== state.task) {
 			throw new AutonomyTransitionError(
 				"Native goal must have an ID and exactly match the autonomy objective",
@@ -199,8 +207,15 @@ export class AutonomyController {
 		});
 	}
 
-	async recordGate(args: RecordAutonomyGateArgs): Promise<AutonomyRun> {
-		const state = await this.requireMutable("record gate evidence");
+	async recordGate(
+		args: RecordAutonomyGateArgs,
+		expectedRunId?: string,
+	): Promise<AutonomyRun> {
+		const state = await this.requireMutable(
+			"record gate evidence",
+			false,
+			expectedRunId,
+		);
 		if (state.status === "paused") {
 			throw new AutonomyTransitionError(
 				"Cannot record gate evidence while autonomy is paused",
@@ -266,8 +281,15 @@ export class AutonomyController {
 		});
 	}
 
-	async recordArtifactRevision(artifactHash: string): Promise<AutonomyRun> {
-		const state = await this.requireMutable("record an artifact revision");
+	async recordArtifactRevision(
+		artifactHash: string,
+		expectedRunId?: string,
+	): Promise<AutonomyRun> {
+		const state = await this.requireMutable(
+			"record an artifact revision",
+			false,
+			expectedRunId,
+		);
 		if (artifactHash.trim().length === 0) {
 			throw new AutonomyTransitionError("Artifact hash must not be empty");
 		}
@@ -285,8 +307,12 @@ export class AutonomyController {
 		});
 	}
 
-	async assessCompletion(): Promise<AutonomyCompletionDecision> {
-		return completionDecision(await this.requireMutable("assess completion"));
+	async assessCompletion(
+		expectedRunId?: string,
+	): Promise<AutonomyCompletionDecision> {
+		return completionDecision(
+			await this.requireMutable("assess completion", false, expectedRunId),
+		);
 	}
 
 	async markSucceeded(expectedRunId?: string): Promise<AutonomyRun> {
@@ -306,8 +332,14 @@ export class AutonomyController {
 		});
 	}
 
-	async assessContinuation(): Promise<AutonomyCompletionDecision> {
-		const state = await this.requireMutable("assess continuation");
+	async assessContinuation(
+		expectedRunId?: string,
+	): Promise<AutonomyCompletionDecision> {
+		const state = await this.requireMutable(
+			"assess continuation",
+			false,
+			expectedRunId,
+		);
 		return {
 			completed: false,
 			failed: state.attempt >= state.maxAttempts,
@@ -338,10 +370,12 @@ export class AutonomyController {
 	async requestTerminalIntent(
 		status: AutonomyTerminalStatus,
 		commandId: string,
+		expectedRunId?: string,
 	): Promise<AutonomyRun> {
 		const state = await this.requireMutable(
 			"request a terminal transition",
 			true,
+			expectedRunId,
 		);
 		if (commandId.trim().length === 0) {
 			throw new AutonomyTransitionError(
@@ -373,10 +407,14 @@ export class AutonomyController {
 		});
 	}
 
-	async finalizeTerminalIntent(commandId: string): Promise<AutonomyRun> {
+	async finalizeTerminalIntent(
+		commandId: string,
+		expectedRunId?: string,
+	): Promise<AutonomyRun> {
 		const state = await this.requireMutable(
 			"finalize a terminal transition",
 			true,
+			expectedRunId,
 		);
 		const intent = state.terminalIntent;
 		if (intent === undefined || intent.commandId !== commandId) {
@@ -408,8 +446,13 @@ export class AutonomyController {
 	async failTerminalIntent(
 		commandId: string,
 		reason: string,
+		expectedRunId?: string,
 	): Promise<AutonomyRun> {
-		const state = await this.requireMutable("fail a terminal transition", true);
+		const state = await this.requireMutable(
+			"fail a terminal transition",
+			true,
+			expectedRunId,
+		);
 		if (
 			state.terminalIntent === undefined ||
 			state.terminalIntent.commandId !== commandId
@@ -442,8 +485,14 @@ export class AutonomyController {
 		return decision;
 	}
 
-	async continueAfterIncomplete(): Promise<AutonomyCompletionDecision> {
-		const state = await this.requireMutable("continue an incomplete run");
+	async continueAfterIncomplete(
+		expectedRunId?: string,
+	): Promise<AutonomyCompletionDecision> {
+		const state = await this.requireMutable(
+			"continue an incomplete run",
+			false,
+			expectedRunId,
+		);
 		if (state.attempt >= state.maxAttempts) {
 			return {
 				completed: false,
