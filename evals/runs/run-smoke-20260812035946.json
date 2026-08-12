@@ -1,0 +1,154 @@
+{
+  "schema_version": "evalfly.run.v1",
+  "run_id": "run-smoke-20260812035946",
+  "suite": "smoke",
+  "config_name": "omp-pantheon EvalFly smoke suite",
+  "created_at": "2026-08-12T03:59:46.161Z",
+  "context": {
+    "spec_slice": "Address final review findings",
+    "session_id": "extensions/oh-my-omp/file-lock.ts,extensions/oh-my-omp/autonomy/runtime.ts,extensions/oh-my-omp/autonomy/controller.ts,extensions/oh-my-omp/autonomy/store.ts,extensions/oh-my-omp/autonomy/types.ts,extensions/oh-my-omp/refinement/ledger.ts,extensions/oh-my-omp/python-skills/environment.ts,extensions/oh-my-omp/README.md,extensions/oh-my-omp/bun.lock,test/autonomy-extension.test.ts,test/autonomy-controller.test.ts,test/refinement-ledger.test.ts,test/python-skills.test.ts,test/omp-version-contract.test.ts",
+    "commit_range": "main..HEAD",
+    "eval_report_path": "evals/reports/run-smoke-20260812035946.md"
+  },
+  "results": [
+    {
+      "case_id": "root-readme-exists",
+      "title": "Root README exists",
+      "risk_tier": "critical",
+      "critical": true,
+      "passed": true,
+      "privacy": {
+        "classification": "public",
+        "sanitized": true
+      },
+      "errors": []
+    },
+    {
+      "case_id": "evalfly-enforce-command-exists",
+      "title": "EvalFly enforcement slash command exists",
+      "risk_tier": "critical",
+      "critical": true,
+      "passed": true,
+      "privacy": {
+        "classification": "public",
+        "sanitized": true
+      },
+      "errors": []
+    },
+    {
+      "case_id": "evalfly-cli-exists",
+      "title": "EvalFly CLI exists",
+      "risk_tier": "critical",
+      "critical": true,
+      "passed": true,
+      "privacy": {
+        "classification": "public",
+        "sanitized": true
+      },
+      "errors": []
+    },
+    {
+      "case_id": "evalfly-enforcement-state-exists",
+      "title": "EvalFly enforcement state module exists",
+      "risk_tier": "critical",
+      "critical": true,
+      "passed": true,
+      "privacy": {
+        "classification": "public",
+        "sanitized": true
+      },
+      "errors": []
+    },
+    {
+      "case_id": "evalfly-completion-gate-exists",
+      "title": "EvalFly completion gate exists",
+      "risk_tier": "critical",
+      "critical": true,
+      "passed": true,
+      "privacy": {
+        "classification": "public",
+        "sanitized": true
+      },
+      "errors": []
+    },
+    {
+      "case_id": "evalfly-trace-buffer-exists",
+      "title": "EvalFly trace buffer exists",
+      "risk_tier": "critical",
+      "critical": true,
+      "passed": true,
+      "privacy": {
+        "classification": "public",
+        "sanitized": true
+      },
+      "errors": []
+    },
+    {
+      "case_id": "verify-workflow-exists",
+      "title": "Verify workflow exists",
+      "risk_tier": "critical",
+      "critical": true,
+      "passed": true,
+      "privacy": {
+        "classification": "public",
+        "sanitized": true
+      },
+      "errors": []
+    },
+    {
+      "case_id": "evalfly-modes-doc-exists",
+      "title": "EvalFly modes documentation exists",
+      "risk_tier": "critical",
+      "critical": true,
+      "passed": true,
+      "privacy": {
+        "classification": "public",
+        "sanitized": true
+      },
+      "errors": []
+    },
+    {
+      "case_id": "evaluation-flywheel-skill-exists",
+      "title": "Evaluation Flywheel skill exists",
+      "risk_tier": "critical",
+      "critical": true,
+      "passed": true,
+      "privacy": {
+        "classification": "public",
+        "sanitized": true
+      },
+      "errors": []
+    },
+    {
+      "case_id": "evalfly-gate-test-exists",
+      "title": "EvalFly gate regression test exists",
+      "risk_tier": "critical",
+      "critical": true,
+      "passed": true,
+      "privacy": {
+        "classification": "public",
+        "sanitized": true
+      },
+      "errors": []
+    },
+    {
+      "case_id": "specsafe-recovery-regression-exists",
+      "title": "SpecSafe recovery regression suite exists",
+      "risk_tier": "critical",
+      "critical": true,
+      "passed": true,
+      "privacy": {
+        "classification": "public",
+        "sanitized": true
+      },
+      "errors": []
+    }
+  ],
+  "summary": {
+    "total": 11,
+    "passed": 11,
+    "failed": 0,
+    "critical_regressions": 0
+  },
+  "verdict": "pass"
+}
