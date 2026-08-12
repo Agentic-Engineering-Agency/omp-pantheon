@@ -92,6 +92,32 @@ afterEach(async () => {
 	);
 });
 
+describe("agentd process context", () => {
+	test("is shared across cache-busted module identities", async () => {
+		const firstUrl = new URL(
+			"../extensions/oh-my-omp/autonomy/agentd.ts?context-a",
+			import.meta.url,
+		);
+		const secondUrl = new URL(
+			"../extensions/oh-my-omp/autonomy/agentd.ts?context-b",
+			import.meta.url,
+		);
+		// Dynamic imports intentionally reproduce OMP's cache-busted extension graph.
+		const first = await import(firstUrl.href);
+		const second = await import(secondUrl.href);
+
+		try {
+			first.updateAgentdProcessContext("run-query", "command-query");
+			expect(second.isCurrentAgentdRun("run-query")).toBe(true);
+			expect(second.currentAgentdCommandId("run-query")).toBe("command-query");
+			second.updateAgentdProcessContext();
+			expect(first.isCurrentAgentdRun("run-query")).toBe(false);
+		} finally {
+			first.updateAgentdProcessContext();
+		}
+	});
+});
+
 describe("CommandJournal", () => {
 	test("deduplicates identical command IDs and rejects conflicting payloads", async () => {
 		const { journal } = await createJournal();

@@ -43,22 +43,53 @@ export interface AgentdStatus {
 	restartCount: number;
 }
 
-let currentAgentdRunId: string | undefined;
-let currentAgentdCommand:
-	| {
-			runId: string;
-			commandId: string;
-	  }
-	| undefined;
+interface AgentdProcessContext {
+	runId?: string;
+	command?: {
+		runId: string;
+		commandId: string;
+	};
+}
+
+const AGENTD_CONTEXT_KEY = Symbol.for(
+	"omp-pantheon.autonomy.agentd-process-context.v1",
+);
+
+function sharedAgentdProcessContext(): AgentdProcessContext {
+	const scope = globalThis as unknown as { [key: symbol]: unknown };
+	const existing = scope[AGENTD_CONTEXT_KEY];
+	if (typeof existing === "object" && existing !== null) {
+		return existing as AgentdProcessContext;
+	}
+	const context: AgentdProcessContext = {};
+	Object.defineProperty(scope, AGENTD_CONTEXT_KEY, {
+		value: context,
+		configurable: false,
+		enumerable: false,
+		writable: false,
+	});
+	return context;
+}
+
+export function updateAgentdProcessContext(
+	runId?: string,
+	commandId?: string,
+): void {
+	const context = sharedAgentdProcessContext();
+	context.runId = runId;
+	context.command =
+		runId !== undefined && commandId !== undefined
+			? { runId, commandId }
+			: undefined;
+}
 
 export function isCurrentAgentdRun(runId: string): boolean {
-	return currentAgentdRunId === runId;
+	return sharedAgentdProcessContext().runId === runId;
 }
 
 export function currentAgentdCommandId(runId: string): string | undefined {
-	return currentAgentdCommand?.runId === runId
-		? currentAgentdCommand.commandId
-		: undefined;
+	const command = sharedAgentdProcessContext().command;
+	return command?.runId === runId ? command.commandId : undefined;
 }
 
 export async function reconcileResidentTerminal(
@@ -259,15 +290,15 @@ async function runAgentd(args: string[]): Promise<void> {
 	const store = new AutonomyStore(root, {
 		stateDirectory: autonomyProjectStateRoot(root),
 	});
-	currentAgentdRunId = runId;
+	updateAgentdProcessContext(runId);
 	const executor = new OmpSessionExecutor();
 	const residentExecutor: CommandExecutor = {
 		async execute(command, signal) {
-			currentAgentdCommand = { runId, commandId: command.id };
+			updateAgentdProcessContext(runId, command.id);
 			try {
 				return await executor.execute(command, signal);
 			} finally {
-				currentAgentdCommand = undefined;
+				updateAgentdProcessContext(runId);
 			}
 		},
 		async close() {
@@ -295,8 +326,7 @@ async function runAgentd(args: string[]): Promise<void> {
 		process.off("SIGINT", stop);
 		process.off("SIGTERM", stop);
 		await worker.close();
-		currentAgentdCommand = undefined;
-		currentAgentdRunId = undefined;
+		updateAgentdProcessContext();
 	}
 }
 
