@@ -7,12 +7,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
 	AutonomyAgentd,
 	type BrokerClient,
+	reconcileResidentTerminal,
 } from "../extensions/oh-my-omp/autonomy/agentd";
+import { AutonomyController } from "../extensions/oh-my-omp/autonomy/controller";
 import {
 	CommandJournal,
 	CommandJournalError,
 	type WorkerCommand,
 } from "../extensions/oh-my-omp/autonomy/journal";
+import { AutonomyStore } from "../extensions/oh-my-omp/autonomy/store";
 import {
 	AutonomyWorker,
 	type CommandExecutor,
@@ -49,6 +52,38 @@ async function createJournal() {
 			now = Date.parse(value);
 		},
 	};
+}
+
+async function createPendingTerminalIntent(commandId = "command-1") {
+	const root = await mkdtemp(join(tmpdir(), "pantheon-terminal-intent-"));
+	roots.push(root);
+	const store = new AutonomyStore(root);
+	const controller = new AutonomyController(store, {
+		createId: () => "run-1",
+		now: () => "2026-08-11T12:00:00.000Z",
+	});
+	await controller.start({
+		task: "Finish durably",
+		maxAttempts: 1,
+		verificationCommand: "true",
+		gates: [
+			{
+				id: "verification",
+				label: "Targeted verification",
+				requirement: { kind: "command" },
+			},
+		],
+	});
+	await controller.recordGate({
+		gateId: "verification",
+		status: "pass",
+		evidence: "exit:0",
+		reporter: "host-verifier",
+		attempt: 1,
+		artifactRevision: 0,
+	});
+	await controller.requestTerminalIntent("succeeded", commandId);
+	return { controller, store };
 }
 
 afterEach(async () => {
@@ -137,18 +172,49 @@ describe("AutonomyWorker", () => {
 		expect(observed).toEqual(["claimed", "closed"]);
 	});
 
-	test("exits after an acknowledged command when the run becomes terminal", async () => {
+	test("exits before another claim when worker ownership changes", async () => {
 		const { journal } = await createJournal();
+		const stateRoot = await mkdtemp(join(tmpdir(), "pantheon-owner-state-"));
+		roots.push(stateRoot);
+		const store = new AutonomyStore(stateRoot);
+		const owner = new AutonomyController(store, {
+			createId: () => "run-1",
+		});
+		await owner.start({
+			task: "Original run",
+			maxAttempts: 1,
+			verificationCommand: "true",
+			gates: [
+				{
+					id: "verification",
+					label: "Verification",
+					requirement: { kind: "command" },
+				},
+			],
+		});
 		await journal.enqueue(command("command-1"));
 		await journal.enqueue(command("command-2"));
-		let terminal = false;
 		let executions = 0;
 		const worker = new AutonomyWorker(
 			journal,
 			{
 				async execute() {
 					executions += 1;
-					terminal = true;
+					await owner.cancel();
+					await new AutonomyController(store, {
+						createId: () => "run-2",
+					}).start({
+						task: "Replacement run",
+						maxAttempts: 1,
+						verificationCommand: "true",
+						gates: [
+							{
+								id: "verification",
+								label: "Verification",
+								requirement: { kind: "command" },
+							},
+						],
+					});
 					return {
 						sessionId: `session-${executions}`,
 						persistedAt: "2026-08-11T12:00:00.500Z",
@@ -159,7 +225,7 @@ describe("AutonomyWorker", () => {
 			{
 				workerId: "worker-a",
 				leaseMs: 5_000,
-				shouldStop: async () => terminal,
+				shouldStop: () => reconcileResidentTerminal("run-1", store, journal),
 			},
 		);
 
@@ -170,6 +236,52 @@ describe("AutonomyWorker", () => {
 			"acknowledged",
 			"queued",
 		]);
+		expect((await store.load())?.id).toBe("run-2");
+	});
+
+	test("finalizes resident success only after journal acknowledgement", async () => {
+		const { journal } = await createJournal();
+		const { store } = await createPendingTerminalIntent();
+		await journal.enqueue(command());
+		const claim = await journal.claimNext("worker-a", 5_000);
+		if (claim === null) throw new Error("Expected command claim");
+
+		expect(await reconcileResidentTerminal("run-1", store, journal)).toBe(
+			false,
+		);
+		expect((await store.load())?.status).toBe("running");
+
+		await journal.acknowledge(
+			claim.command.id,
+			"worker-a",
+			claim.fencingToken,
+			{
+				sessionId: "session-1",
+				persistedAt: "2026-08-11T12:00:00.500Z",
+			},
+		);
+		expect(await reconcileResidentTerminal("run-1", store, journal)).toBe(true);
+		expect((await store.load())?.status).toBe("succeeded");
+	});
+
+	test("fails a pending terminal transition when persistence is uncertain", async () => {
+		const { journal } = await createJournal();
+		const { store } = await createPendingTerminalIntent();
+		await journal.enqueue(command());
+		const claim = await journal.claimNext("worker-a", 5_000);
+		if (claim === null) throw new Error("Expected command claim");
+		await journal.markUncertain(
+			claim.command.id,
+			"worker-a",
+			claim.fencingToken,
+			"flush failed",
+		);
+
+		expect(await reconcileResidentTerminal("run-1", store, journal)).toBe(true);
+		expect(await store.load()).toMatchObject({
+			status: "failed",
+			lastError: "Terminal transition persistence is uncertain: flush failed",
+		});
 	});
 
 	test("does not acknowledge execution without a persistence receipt", async () => {

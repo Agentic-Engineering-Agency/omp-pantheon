@@ -11,6 +11,7 @@ import type {
 import {
 	type AgentdStatus,
 	AutonomyAgentd,
+	currentAgentdCommandId,
 	isCurrentAgentdRun,
 } from "./agentd";
 import { registerAutonomyCommands } from "./commands";
@@ -23,7 +24,7 @@ import {
 } from "./runtime-paths";
 import { PersistedScheduler } from "./scheduler";
 import { AutonomyStore } from "./store";
-import type { AutonomyRun } from "./types";
+import type { AutonomyRun, AutonomyTerminalStatus } from "./types";
 
 interface NativeGoalUpdatedEvent {
 	goal: {
@@ -87,6 +88,7 @@ export interface AutonomyRuntimeOptions {
 	agentdFactory?: (cwd: string, stateHome?: string) => AgentdClient;
 	now?: () => string;
 	isResidentWorker?: (runId: string) => boolean;
+	residentCommandId?: (runId: string) => string | undefined;
 }
 
 export class AutonomyRuntime {
@@ -179,7 +181,10 @@ export class AutonomyRuntime {
 		if (ACTIVE_STATUSES[state.status] !== true && state.status !== "paused") {
 			return controller.pause();
 		}
-		await this.fenceWorkerBeforeTransition(state.id);
+		if (await this.requestResidentTerminal(controller, state.id, "paused")) {
+			return (await controller.get()) ?? state;
+		}
+		await this.stopAgentdAndRequireTerminal(state.id);
 		return controller.pause();
 	}
 
@@ -201,7 +206,10 @@ export class AutonomyRuntime {
 		if (state === null) {
 			throw new AutonomyTransitionError("No autonomy run exists");
 		}
-		await this.fenceWorkerBeforeTransition(state.id);
+		if (await this.requestResidentTerminal(controller, state.id, "cancelled")) {
+			return (await controller.get()) ?? state;
+		}
+		await this.stopAgentdAndRequireTerminal(state.id);
 		return controller.cancel();
 	}
 
@@ -317,7 +325,15 @@ export class AutonomyRuntime {
 		}
 		const decision = await controller.assessCompletion();
 		if (decision.completed) {
-			await this.fenceWorkerBeforeTransition(state.id);
+			if (
+				await this.requestResidentTerminal(controller, state.id, "succeeded")
+			) {
+				this.pi.logger.debug(
+					"Autonomy success is pending resident command acknowledgement",
+				);
+				return;
+			}
+			await this.stopAgentdAndRequireTerminal(state.id);
 			await controller.markSucceeded();
 			this.pi.logger.info(
 				"Autonomy run succeeded after objective gates passed",
@@ -326,7 +342,13 @@ export class AutonomyRuntime {
 		}
 		const continuation = await controller.assessContinuation();
 		if (continuation.failed) {
-			await this.fenceWorkerBeforeTransition(state.id);
+			if (await this.requestResidentTerminal(controller, state.id, "failed")) {
+				this.pi.logger.debug(
+					"Autonomy failure is pending resident command acknowledgement",
+				);
+				return;
+			}
+			await this.stopAgentdAndRequireTerminal(state.id);
 			await controller.markFailedAtAttemptBound();
 			this.pi.logger.warn("Autonomy run failed at its maximum attempt bound");
 			return;
@@ -406,9 +428,26 @@ export class AutonomyRuntime {
 		return this.options.isResidentWorker?.(runId) ?? isCurrentAgentdRun(runId);
 	}
 
-	private async fenceWorkerBeforeTransition(runId: string): Promise<void> {
-		if (this.isResidentWorker(runId)) return;
-		await this.stopAgentdAndRequireTerminal(runId);
+	private residentCommandId(runId: string): string | undefined {
+		return (
+			this.options.residentCommandId?.(runId) ?? currentAgentdCommandId(runId)
+		);
+	}
+
+	private async requestResidentTerminal(
+		controller: AutonomyController,
+		runId: string,
+		status: AutonomyTerminalStatus,
+	): Promise<boolean> {
+		if (!this.isResidentWorker(runId)) return false;
+		const commandId = this.residentCommandId(runId);
+		if (commandId === undefined) {
+			throw new AutonomyTransitionError(
+				"Resident autonomy transition has no active command",
+			);
+		}
+		await controller.requestTerminalIntent(status, commandId);
+		return true;
 	}
 
 	private async stopAgentdAndRequireTerminal(runId: string): Promise<void> {

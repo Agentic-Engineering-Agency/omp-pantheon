@@ -3,6 +3,7 @@ import type {
 	AutonomyCompletionDecision,
 	AutonomyGateRecord,
 	AutonomyRun,
+	AutonomyTerminalStatus,
 	RecordAutonomyGateArgs,
 	StartAutonomyArgs,
 } from "./types";
@@ -78,10 +79,25 @@ function completionDecision(state: AutonomyRun): AutonomyCompletionDecision {
 	};
 }
 
+function terminalEligibilityError(
+	state: AutonomyRun,
+	status: AutonomyTerminalStatus,
+): string | null {
+	if (status === "succeeded" && !completionDecision(state).completed) {
+		return "Cannot mark autonomy succeeded without current gate evidence";
+	}
+	if (
+		status === "failed" &&
+		(state.attempt < state.maxAttempts || completionDecision(state).completed)
+	) {
+		return "Cannot mark autonomy failed before its incomplete attempt bound";
+	}
+	return null;
+}
+
 export class AutonomyController {
 	private readonly now: () => string;
 	private readonly createId: () => string;
-	private cachedState: AutonomyRun | null | undefined;
 
 	constructor(
 		private readonly store: AutonomyStore,
@@ -92,10 +108,7 @@ export class AutonomyController {
 	}
 
 	async get(): Promise<AutonomyRun | null> {
-		if (this.cachedState === undefined) {
-			this.cachedState = await this.store.load();
-		}
-		return this.cachedState;
+		return this.store.load();
 	}
 
 	async start(args: StartAutonomyArgs): Promise<AutonomyRun> {
@@ -160,7 +173,6 @@ export class AutonomyController {
 			updatedAt: timestamp,
 		};
 		await this.store.save(state, existing?.revision ?? 0);
-		this.cachedState = state;
 		return state;
 	}
 
@@ -270,6 +282,7 @@ export class AutonomyController {
 				resetGate(gate, state.attempt, artifactRevision),
 			),
 			updatedAt: timestamp,
+			terminalIntent: undefined,
 		});
 	}
 
@@ -279,14 +292,14 @@ export class AutonomyController {
 
 	async markSucceeded(): Promise<AutonomyRun> {
 		const state = await this.requireMutable("mark completion");
-		if (!completionDecision(state).completed) {
-			throw new AutonomyTransitionError(
-				"Cannot mark autonomy succeeded without current gate evidence",
-			);
+		const error = terminalEligibilityError(state, "succeeded");
+		if (error !== null) {
+			throw new AutonomyTransitionError(error);
 		}
 		return this.persist({
 			...state,
 			status: "succeeded",
+			terminalIntent: undefined,
 			updatedAt: this.now(),
 		});
 	}
@@ -304,18 +317,89 @@ export class AutonomyController {
 
 	async markFailedAtAttemptBound(): Promise<AutonomyRun> {
 		const state = await this.requireMutable("mark attempt-bound failure");
+		const error = terminalEligibilityError(state, "failed");
+		if (error !== null) {
+			throw new AutonomyTransitionError(error);
+		}
+		return this.persist({
+			...state,
+			status: "failed",
+			terminalIntent: undefined,
+			lastError: `Maximum attempts reached (${state.maxAttempts})`,
+			updatedAt: this.now(),
+		});
+	}
+
+	async requestTerminalIntent(
+		status: AutonomyTerminalStatus,
+		commandId: string,
+	): Promise<AutonomyRun> {
+		const state = await this.requireMutable("request a terminal transition");
+		if (commandId.trim().length === 0) {
+			throw new AutonomyTransitionError(
+				"Terminal transition command ID must not be empty",
+			);
+		}
+		const error = terminalEligibilityError(state, status);
+		if (error !== null) throw new AutonomyTransitionError(error);
+		return this.persist({
+			...state,
+			terminalIntent: {
+				status,
+				commandId: commandId.trim(),
+				requestedAt: this.now(),
+			},
+			updatedAt: this.now(),
+		});
+	}
+
+	async finalizeTerminalIntent(commandId: string): Promise<AutonomyRun> {
+		const state = await this.requireMutable("finalize a terminal transition");
+		const intent = state.terminalIntent;
+		if (intent === undefined || intent.commandId !== commandId) {
+			throw new AutonomyTransitionError(
+				"Terminal transition does not match the acknowledged command",
+			);
+		}
+		const error = terminalEligibilityError(state, intent.status);
+		if (error !== null) {
+			return this.persist({
+				...state,
+				status: "waiting",
+				terminalIntent: undefined,
+				updatedAt: this.now(),
+			});
+		}
+		return this.persist({
+			...state,
+			status: intent.status,
+			terminalIntent: undefined,
+			lastError:
+				intent.status === "failed"
+					? `Maximum attempts reached (${state.maxAttempts})`
+					: state.lastError,
+			updatedAt: this.now(),
+		});
+	}
+
+	async failTerminalIntent(
+		commandId: string,
+		reason: string,
+	): Promise<AutonomyRun> {
+		const state = await this.requireMutable("fail a terminal transition");
 		if (
-			state.attempt < state.maxAttempts ||
-			completionDecision(state).completed
+			state.terminalIntent === undefined ||
+			state.terminalIntent.commandId !== commandId
 		) {
 			throw new AutonomyTransitionError(
-				"Cannot mark autonomy failed before its incomplete attempt bound",
+				"Terminal transition does not match the failed command",
 			);
 		}
 		return this.persist({
 			...state,
 			status: "failed",
-			lastError: `Maximum attempts reached (${state.maxAttempts})`,
+			terminalIntent: undefined,
+			lastError: reason,
 			updatedAt: this.now(),
 		});
 	}
@@ -330,6 +414,7 @@ export class AutonomyController {
 				...state,
 				status: "waiting",
 				updatedAt: this.now(),
+				terminalIntent: undefined,
 			});
 		}
 		return decision;
@@ -357,6 +442,7 @@ export class AutonomyController {
 				resetGate(gate, attempt, state.artifactRevision),
 			),
 			updatedAt: timestamp,
+			terminalIntent: undefined,
 			lastError: undefined,
 		});
 		return {
@@ -369,7 +455,12 @@ export class AutonomyController {
 	async pause(): Promise<AutonomyRun> {
 		const state = await this.requireMutable("pause");
 		if (state.status === "paused") return state;
-		return this.persist({ ...state, status: "paused", updatedAt: this.now() });
+		return this.persist({
+			...state,
+			status: "paused",
+			terminalIntent: undefined,
+			updatedAt: this.now(),
+		});
 	}
 
 	async resume(): Promise<AutonomyRun> {
@@ -379,7 +470,12 @@ export class AutonomyController {
 				`Cannot resume autonomy from ${state.status}`,
 			);
 		}
-		return this.persist({ ...state, status: "running", updatedAt: this.now() });
+		return this.persist({
+			...state,
+			status: "running",
+			terminalIntent: undefined,
+			updatedAt: this.now(),
+		});
 	}
 
 	async cancel(): Promise<AutonomyRun> {
@@ -387,6 +483,7 @@ export class AutonomyController {
 		return this.persist({
 			...state,
 			status: "cancelled",
+			terminalIntent: undefined,
 			updatedAt: this.now(),
 		});
 	}
@@ -408,11 +505,9 @@ export class AutonomyController {
 		}
 		return state;
 	}
-
 	private async persist(state: AutonomyRun): Promise<AutonomyRun> {
 		const next = { ...state, revision: state.revision + 1 };
 		await this.store.save(next, state.revision);
-		this.cachedState = next;
 		return next;
 	}
 }

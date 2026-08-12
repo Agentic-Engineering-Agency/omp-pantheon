@@ -16,6 +16,7 @@ import {
 	AutonomyTransitionError,
 } from "../extensions/oh-my-omp/autonomy/controller";
 import { AutonomyStore } from "../extensions/oh-my-omp/autonomy/store";
+import type { AutonomyRun } from "../extensions/oh-my-omp/autonomy/types";
 
 const roots: string[] = [];
 
@@ -286,6 +287,56 @@ describe("AutonomyController", () => {
 			"run-2",
 		]);
 	});
+
+	test("refreshes cross-process finalization before starting the next run", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pantheon-autonomy-refresh-"));
+		roots.push(root);
+		const store = new AutonomyStore(root);
+		const ids = ["run-1", "run-2"];
+		const ui = new AutonomyController(store, {
+			createId: () => ids.shift() ?? "unexpected-run",
+		});
+		await ui.start({
+			task: "First cross-process run",
+			maxAttempts: 1,
+			verificationCommand: "true",
+			gates: [
+				{
+					id: "verification",
+					label: "Targeted verification",
+					requirement: { kind: "command" },
+				},
+			],
+		});
+		await ui.recordGate({
+			gateId: "verification",
+			status: "pass",
+			evidence: "exit:0",
+			reporter: "host-verifier",
+			attempt: 1,
+			artifactRevision: 0,
+		});
+		expect((await ui.get())?.status).toBe("running");
+
+		const resident = new AutonomyController(store);
+		await resident.requestTerminalIntent("succeeded", "command-1");
+		await resident.finalizeTerminalIntent("command-1");
+
+		expect((await ui.get())?.status).toBe("succeeded");
+		const next = await ui.start({
+			task: "Second cross-process run",
+			maxAttempts: 1,
+			verificationCommand: "true",
+			gates: [
+				{
+					id: "verification",
+					label: "Targeted verification",
+					requirement: { kind: "command" },
+				},
+			],
+		});
+		expect(next).toMatchObject({ id: "run-2", status: "running" });
+	});
 });
 
 describe("AutonomyStore", () => {
@@ -335,6 +386,19 @@ describe("AutonomyStore", () => {
 		};
 
 		await expect(store.save(forged, 1)).rejects.toThrow("gate record");
+	});
+
+	test("rejects malformed resident terminal intents", async () => {
+		const { controller, store } = await createHarness();
+		const started = await startRun(controller);
+		const forged: AutonomyRun = {
+			...started,
+			revision: 2,
+			terminalIntent: null as unknown as AutonomyRun["terminalIntent"],
+			updatedAt: "2026-08-11T12:00:01.000Z",
+		};
+
+		await expect(store.save(forged, 1)).rejects.toThrow("invalid shape");
 	});
 
 	test("rejects stale concurrent saves without corrupting journal continuity", async () => {

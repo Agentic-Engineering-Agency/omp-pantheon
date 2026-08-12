@@ -45,6 +45,18 @@ export interface AutonomyGateRecord extends AutonomyGateDefinition {
 	updatedAt?: string;
 }
 
+export type AutonomyTerminalStatus =
+	| "paused"
+	| "succeeded"
+	| "failed"
+	| "cancelled";
+
+export interface AutonomyTerminalIntent {
+	status: AutonomyTerminalStatus;
+	commandId: string;
+	requestedAt: string;
+}
+
 export interface AutonomyRun {
 	schemaVersion: 1;
 	id: string;
@@ -61,6 +73,7 @@ export interface AutonomyRun {
 	createdAt: string;
 	updatedAt: string;
 	lastError?: string;
+	terminalIntent?: AutonomyTerminalIntent;
 }
 
 export interface StartAutonomyArgs {

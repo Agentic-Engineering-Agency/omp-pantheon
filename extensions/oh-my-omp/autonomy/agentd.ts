@@ -7,6 +7,7 @@ import type {
 	DaemonRpcResult,
 } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 
+import { AutonomyController } from "./controller";
 import { CommandJournal } from "./journal";
 import {
 	autonomyProjectStateRoot,
@@ -15,7 +16,11 @@ import {
 } from "./runtime-paths";
 import { PersistedScheduler } from "./scheduler";
 import { AutonomyStore } from "./store";
-import { AutonomyWorker, OmpSessionExecutor } from "./worker";
+import {
+	AutonomyWorker,
+	type CommandExecutor,
+	OmpSessionExecutor,
+} from "./worker";
 
 const DAEMON_NAME_PREFIX = "pantheon-agentd";
 const READY_LINE = "pantheon-agentd ready";
@@ -39,9 +44,59 @@ export interface AgentdStatus {
 }
 
 let currentAgentdRunId: string | undefined;
+let currentAgentdCommand:
+	| {
+			runId: string;
+			commandId: string;
+	  }
+	| undefined;
 
 export function isCurrentAgentdRun(runId: string): boolean {
 	return currentAgentdRunId === runId;
+}
+
+export function currentAgentdCommandId(runId: string): string | undefined {
+	return currentAgentdCommand?.runId === runId
+		? currentAgentdCommand.commandId
+		: undefined;
+}
+
+export async function reconcileResidentTerminal(
+	runId: string,
+	store: AutonomyStore,
+	journal: CommandJournal,
+): Promise<boolean> {
+	const state = await store.load();
+	if (state === null || state.id !== runId) return true;
+	if (["paused", "succeeded", "failed", "cancelled"].includes(state.status)) {
+		return true;
+	}
+	const intent = state.terminalIntent;
+	if (intent === undefined) return false;
+	const record = (await journal.list()).find(
+		(candidate) => candidate.command.id === intent.commandId,
+	);
+	const controller = new AutonomyController(store);
+	if (record?.status === "acknowledged") {
+		const finalized = await controller.finalizeTerminalIntent(intent.commandId);
+		return ["paused", "succeeded", "failed", "cancelled"].includes(
+			finalized.status,
+		);
+	}
+	if (
+		record === undefined ||
+		record.status === "failed" ||
+		record.status === "uncertain"
+	) {
+		await controller.failTerminalIntent(
+			intent.commandId,
+			record === undefined
+				? "Terminal transition command is missing from the journal"
+				: `Terminal transition persistence is ${record.status}: ${record.lastError ?? "no error recorded"}`,
+		);
+		return true;
+	}
+	return false;
 }
 
 export class AutonomyAgentd {
@@ -204,19 +259,27 @@ async function runAgentd(args: string[]): Promise<void> {
 		stateDirectory: autonomyProjectStateRoot(root),
 	});
 	currentAgentdRunId = runId;
+	const executor = new OmpSessionExecutor();
+	const residentExecutor: CommandExecutor = {
+		async execute(command, signal) {
+			currentAgentdCommand = { runId, commandId: command.id };
+			try {
+				return await executor.execute(command, signal);
+			} finally {
+				currentAgentdCommand = undefined;
+			}
+		},
+		async close() {
+			await executor.close();
+		},
+	};
 	const worker = new AutonomyWorker(
 		journal,
-		new OmpSessionExecutor(),
+		residentExecutor,
 		{
 			workerId: `agentd-${process.pid}-${randomUUID()}`,
 			leaseMs: 60_000,
-			shouldStop: async () => {
-				const state = await store.load();
-				return (
-					state?.id === runId &&
-					["paused", "succeeded", "failed", "cancelled"].includes(state.status)
-				);
-			},
+			shouldStop: () => reconcileResidentTerminal(runId, store, journal),
 		},
 		new PersistedScheduler(stateRoot, journal),
 	);
@@ -231,6 +294,7 @@ async function runAgentd(args: string[]): Promise<void> {
 		process.off("SIGINT", stop);
 		process.off("SIGTERM", stop);
 		await worker.close();
+		currentAgentdCommand = undefined;
 		currentAgentdRunId = undefined;
 	}
 }

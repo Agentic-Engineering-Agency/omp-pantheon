@@ -13,6 +13,7 @@ import type {
 	AutonomyGateRecord,
 	AutonomyJournalEvent,
 	AutonomyRun,
+	AutonomyTerminalIntent,
 } from "./types";
 
 const STATE_DIRECTORY = join(".pi", "autonomy");
@@ -230,7 +231,10 @@ export class AutonomyStore {
 			(state.artifactHash !== undefined &&
 				(typeof state.artifactHash !== "string" ||
 					state.artifactHash.trim().length === 0)) ||
-			(state.lastError !== undefined && typeof state.lastError !== "string")
+			(state.lastError !== undefined && typeof state.lastError !== "string") ||
+			(state.terminalIntent !== undefined &&
+				((state.status !== "running" && state.status !== "waiting") ||
+					!this.isValidTerminalIntent(state.terminalIntent)))
 		) {
 			throw new AutonomyStoreError(`Autonomy ${source} has an invalid shape`);
 		}
@@ -255,6 +259,21 @@ export class AutonomyStore {
 				`Autonomy ${source} succeeded without passing every gate`,
 			);
 		}
+	}
+
+	private isValidTerminalIntent(
+		value: unknown,
+	): value is AutonomyTerminalIntent {
+		if (typeof value !== "object" || value === null) return false;
+		const intent = value as Partial<AutonomyTerminalIntent>;
+		return (
+			typeof intent.status === "string" &&
+			["paused", "succeeded", "failed", "cancelled"].includes(intent.status) &&
+			typeof intent.commandId === "string" &&
+			intent.commandId.trim().length > 0 &&
+			typeof intent.requestedAt === "string" &&
+			Number.isFinite(Date.parse(intent.requestedAt))
+		);
 	}
 
 	private isValidGateRecord(

@@ -1206,7 +1206,7 @@ describe("autonomy extension", () => {
 		});
 	}
 
-	test("resident worker terminalizes naturally without stopping its own daemon", async () => {
+	test("resident worker records terminal intent without stopping its own daemon", async () => {
 		const createResidentExtension = async (
 			prefix: string,
 		): Promise<{
@@ -1236,6 +1236,7 @@ describe("autonomy extension", () => {
 						{
 							stateHome,
 							isResidentWorker: () => true,
+							residentCommandId: () => "resident-command",
 							agentdFactory: () => ({
 								async start() {
 									return { state: "ready", restartCount: 0 };
@@ -1296,16 +1297,14 @@ describe("autonomy extension", () => {
 			{},
 			success.extension.ctx,
 		);
-		expect(
-			(
-				await new AutonomyStore(success.cwd, {
-					stateDirectory: autonomyProjectStateRoot(
-						success.cwd,
-						success.stateHome,
-					),
-				}).load()
-			)?.status,
-		).toBe("succeeded");
+		const successState = await new AutonomyStore(success.cwd, {
+			stateDirectory: autonomyProjectStateRoot(success.cwd, success.stateHome),
+		}).load();
+		expect(successState?.status).toBe("running");
+		expect(successState?.terminalIntent).toMatchObject({
+			status: "succeeded",
+			commandId: "resident-command",
+		});
 		expect(success.stopCalls()).toBe(0);
 
 		const failure = await createResidentExtension("resident-failure");
@@ -1321,16 +1320,14 @@ describe("autonomy extension", () => {
 			{},
 			failure.extension.ctx,
 		);
-		expect(
-			(
-				await new AutonomyStore(failure.cwd, {
-					stateDirectory: autonomyProjectStateRoot(
-						failure.cwd,
-						failure.stateHome,
-					),
-				}).load()
-			)?.status,
-		).toBe("failed");
+		const failureState = await new AutonomyStore(failure.cwd, {
+			stateDirectory: autonomyProjectStateRoot(failure.cwd, failure.stateHome),
+		}).load();
+		expect(failureState?.status).toBe("running");
+		expect(failureState?.terminalIntent).toMatchObject({
+			status: "failed",
+			commandId: "resident-command",
+		});
 		expect(failure.stopCalls()).toBe(0);
 	});
 
