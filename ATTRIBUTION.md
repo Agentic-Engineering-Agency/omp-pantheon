@@ -20,6 +20,16 @@ and concepts to OMP's native tool grammar.
   [pi-seshat](https://github.com/Agentic-Engineering-Agency/pi-seshat), the
   public Seshat the Ghola harness integrated into this OMP bundle. They are
   credited separately because they are not part of the OMO prompt lineage.
+- **Prime Agent design inspiration:** long-running sessions, persistent goals
+  and schedules, retained subagents, kernel checkpoints, Python-backed skills,
+  and evidence-backed harness refinement were studied from
+  [PrimeIntellect-ai/prime-agent](https://github.com/PrimeIntellect-ai/prime-agent),
+  licensed **MIT** (copyright Mario Zechner and Prime Intellect). Pantheon's
+  implementation is original TypeScript written against OMP's public SDK and
+  native goals, sessions, Task/Hub, eval, and launch broker. No Prime Agent
+  source code, notebook tool surface, daemon implementation, or Pi package is
+  copied or vendored. Unsupported OMP capabilities are exposed as unsupported
+  rather than emulated through private internals.
 
 ## Grammar mapping (OMO → OMP)
 

@@ -8,10 +8,19 @@ the Seshat/SpecSafe runtime into the local harness.
 ## What's in this bundle
 
 ### Extension (`./index.ts`)
-- Advertises `~/.omp/agent/skills/` via `resources_discover`.
-- Owns the **Ralph / ULW loop runtime** (state machine driven by `agent_end`).
-- Registers extension commands: `/ralph-loop`, `/ulw-loop`, `/cancel-ralph`,
-  `/stop-continuation`.
+- Advertises this repository's bundled `skills/` directory via
+  `resources_discover`; `install.sh` separately exposes the installed bundle
+  beneath `~/.omp/agent/`.
+- Owns the opt-in **verified autonomy runtime**: exact native OMP goal
+  ownership, a fixed host-run verification command, bounded attempts,
+  checksummed/CAS private state, and a run-scoped broker worker.
+- Stores objective state, executable worker commands, and schedules outside
+  the repository in a private per-user state directory; incomplete attempts
+  enqueue durable continuations, leases heartbeat, and terminal
+  `failed`/`uncertain` outcomes are not replayed indefinitely.
+- Registers `/autonomy` and the parameterless `autonomy_gate` verification
+  tool. See [`docs/autonomy.md`](../../docs/autonomy.md) for lifecycle, state,
+  security boundaries, and migration details.
 - Registers lifecycle guardrails: `todo-enforcer`, `comment-checker`, and
   `intent-gate`.
 
@@ -71,7 +80,7 @@ The OMO templates were adapted to OMP's tool grammar:
 | `LspFindReferences` | `lsp(action: "references")` |
 | `lsp_rename` | `lsp(action: "rename")` |
 | `ast_grep_search` / `ast_grep_replace` | `ast_grep` / `ast_edit` |
-| `background_output` / `background_cancel` | OMP's `task` lifecycle and the Ralph/ULW loop runtime provide the adapted continuation model. |
+| `background_output` / `background_cancel` | OMP's `task`/Hub lifecycle plus the verified `/autonomy` runtime provide bounded continuation and durable recovery. |
 
 ## How it loads
 

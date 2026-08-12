@@ -23,6 +23,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+	readSpecSafeClosureReceipt,
+	writeSpecSafeClosureReceipt,
+} from "../../../extensions/oh-my-omp/specsafe-receipts";
+import {
 	type CostCounter,
 	type CurrentSlice,
 	type HistoryEntry,
@@ -125,18 +129,35 @@ function cmdEnd(args: string[], statePath: string): number {
 	}
 
 	const slice = state.currentSlice;
+	const existingReceipt = readSpecSafeClosureReceipt(
+		process.cwd(),
+		slice.id,
+		slice.beganAt,
+	);
+	if (existingReceipt && existingReceipt.outcome !== outcome) {
+		fail(
+			`error: interrupted closure already recorded outcome ${existingReceipt.outcome}`,
+			1,
+		);
+	}
 	const entry: HistoryEntry = {
 		sliceId: slice.id,
 		workspaceId: slice.workspaceId,
 		sessionId: slice.sessionId,
 		beganAt: slice.beganAt,
-		endedAt: new Date().toISOString(),
+		endedAt: existingReceipt?.endedAt ?? new Date().toISOString(),
 		outcome,
 		costSummary: {
 			...slice.costCounter,
 			subagentTokens: { ...slice.costCounter.subagentTokens },
 		},
 	};
+	writeSpecSafeClosureReceipt(process.cwd(), {
+		sliceId: entry.sliceId,
+		beganAt: entry.beganAt,
+		endedAt: entry.endedAt,
+		outcome: entry.outcome,
+	});
 	const next: StateFile = {
 		currentSlice: null,
 		history: [...state.history, entry],

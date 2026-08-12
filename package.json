@@ -8,9 +8,9 @@
     "test": "bun test ./test/*.test.ts ./test/**/*.test.ts ./skills/**/test/*.test.ts",
     "test:unit": "bun test --test-name-pattern='\\[unit\\]' ./test/*.test.ts ./test/**/*.test.ts ./skills/**/test/*.test.ts",
     "typecheck": "tsc --noEmit && (cd extensions/oh-my-omp && bun run typecheck)",
-    "format": "bun x --bun @biomejs/biome format --write hooks test skills evals/config.json evals/cases evals/rubrics extensions/oh-my-omp/index.ts extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/loop",
-    "format:check": "bun x --bun @biomejs/biome format hooks test skills evals/config.json evals/cases evals/rubrics extensions/oh-my-omp/index.ts extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/loop",
-    "lint": "bun x --bun @biomejs/biome check hooks test skills evals/config.json evals/cases evals/rubrics extensions/oh-my-omp/index.ts extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/loop"
+    "format": "bun x --bun @biomejs/biome format --write hooks test skills evals/config.json evals/cases evals/rubrics extensions/oh-my-omp/*.ts extensions/oh-my-omp/autonomy extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/python-skills extensions/oh-my-omp/refinement",
+    "format:check": "bun x --bun @biomejs/biome format hooks test skills evals/config.json evals/cases evals/rubrics extensions/oh-my-omp/*.ts extensions/oh-my-omp/autonomy extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/python-skills extensions/oh-my-omp/refinement",
+    "lint": "bun x --bun @biomejs/biome check hooks test skills evals/config.json evals/cases evals/rubrics extensions/oh-my-omp/*.ts extensions/oh-my-omp/autonomy extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/python-skills extensions/oh-my-omp/refinement"
   },
   "dependencies": {
     "@linear/sdk": "^82.1.0",
@@ -19,8 +19,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
-    "@mariozechner/pi-coding-agent": "^0.70.2",
-    "@oh-my-pi/pi-coding-agent": "^16.0.5",
+    "@oh-my-pi/pi-coding-agent": "^17.2.14",
     "@types/bun": "latest",
     "@types/turndown": "^5.0.5",
     "typescript": "^6.0.3"

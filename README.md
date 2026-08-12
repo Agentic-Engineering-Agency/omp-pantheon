@@ -15,6 +15,9 @@ If you are arriving here from GitHub with no prior context:
   specialist agents, durable memory, SpecSafe/Seshat slice discipline, EvalFly
   evaluation evidence, local completion gates, trace hygiene, branch-level E2E
   verification, review protocols, and installable project templates.
+- **Verified autonomy** with native OMP goal gates, durable command/schedule
+  journals, a broker-managed resident worker, bounded retries, and recovery
+  across process restarts.
 - **The core differentiator:** most agent harnesses help an AI edit code; this
   harness tries to make agentic work *reviewable and enforceable* by tying it to
   contracts, evidence, reports, traces, and PASS/FAIL/INCONCLUSIVE verdicts.
@@ -45,6 +48,10 @@ flows, and make it harder for an agent to simply say “done” without proof.
   and PASS/FAIL/INCONCLUSIVE verdicts.
 - **Guardrails and lifecycle hooks** for todos, approvals, intent checks,
   comments, SpecSafe sessions/subagents, fallback audits, and artifact hygiene.
+- **Approval-gated refinement and isolated Python skills** exposed through
+  human slash commands, with checksummed ledgers, private rollback snapshots,
+  content-addressed environments, strict JSON contracts, resource bounds, and
+  fail-closed network policy.
 - **Dogfooding:** this repo contains its own root `evals/` smoke suite that
   protects critical harness files and proves EvalFly works on the harness itself.
 
@@ -88,6 +95,8 @@ local, inspectable, hackable, and shaped around an eval-first engineering loop.
 | Evaluations | No built-in project-local eval evidence contract. | Adds EvalFly: `evals/`, deterministic suites, run JSON, markdown reports, trace import/normalization/audit, compare/report/summary commands, and templates. |
 | Enforcement | Normal harness/tool completion behavior. | Adds explicit local EvalFly enforcement: `evalfly enforce start` writes project-local state and the OMP stop gate blocks completion without fresh matching passing evidence. |
 | Branch QA | Whatever the user asks the agent to test. | Adds `agentic-branch-e2e`: freeze criteria first, run real user flows, capture UI/network/log/backend evidence, drive negative cases, and emit PASS/FAIL/INCONCLUSIVE. |
+| Verified autonomy | No Pantheon-specific durable objective runtime. | Adds opt-in `/autonomy`, native-goal and targeted-command gates, conditional exact EvalFly/SpecSafe adapters, broker-managed session resumption, leased/fenced command delivery, persisted scheduling, and bounded retries. |
+| Refinement/Python skills | General extension and tool mechanisms. | Adds human-only `/refinement` and `/python-skill` commands for approval-gated append-only refinement plus manifest-driven isolated Python execution with exact pins and content-addressed environments. |
 | Safety boundary | OMP permissions and configured hooks. | Adds intent gates, approval gates, comment checks, SpecSafe hooks, EvalFly artifact hardening, privacy checks for sanitized traces, and non-global opt-in enforcement. |
 | Dogfooding | Not applicable. | The repo contains its own `evals/` smoke suite protecting critical harness files and tests that keep the suite synchronized. |
 
@@ -115,10 +124,19 @@ Implemented and verified in this bundle:
 - optional GitHub Actions templates for advisory and required EvalFly checks;
 - bootstrap support for initializing project-local `evals/` with
   `--with-evalfly`;
-- root `evals/` dogfood suite in this repository with ten critical smoke cases;
+- root `evals/` dogfood suite in this repository with critical smoke cases;
 - tests covering EvalFly state, command parsing, stop-gate behavior, trace
   buffering, CLI behavior, and the dogfood eval repo;
 - `agentic-branch-e2e` as the real-user branch verification protocol.
+- opt-in `/autonomy` commands and the `autonomy_gate` tool;
+- durable autonomy state, command queue, persisted scheduler generations,
+  lease/fencing recovery, and broker-managed `pantheon-agentd`;
+- human-only `/refinement` lifecycle with append-only, checksummed approval
+  history and private rollback snapshots;
+- human-only `/python-skill` discovery/execution for manifest-validated isolated
+  Python skills with environment reuse;
+- capability-gated checkpoint and retained-agent contracts that fail honestly
+  when stock OMP 17.2.14 lacks the required public APIs.
 
 ## What it does not claim yet
 
@@ -134,6 +152,8 @@ evaluation platform. Today it does **not** automatically:
 - promote traces into eval cases automatically;
 - maintain hidden/dev eval splits;
 - prune or deduplicate stale eval debt.
+- provide public OMP 17.2.14 kernel export/import or retained-agent keep-alive
+  capabilities; Pantheon reports both as unsupported instead of using internals.
 
 Those are explicit roadmap items, not completed claims.
 
@@ -176,7 +196,7 @@ skills/<name>/SKILL.md  OMP skills and workflow protocols
 skills/evalfly/          EvalFly templates, CLI, and adoption docs
 evals/                  This repo's dogfood EvalFly smoke suite
 hooks/*.ts              OMP lifecycle hooks from Seshat/SpecSafe
-extensions/oh-my-omp/   loop runtime, Honcho integration, lifecycle hooks
+extensions/oh-my-omp/   verified autonomy, EvalFly, Honcho, lifecycle hooks
 test/                   integration/regression tests for the bundle
 docs/                   public overview, EvalFly guides, plans, port notes
 package.json            root test/typecheck/format/lint runner
@@ -202,6 +222,9 @@ explicitly activated per repo/session.
 
 - [Harness overview](./docs/harness-overview.md) — complete newcomer-oriented
   description of the architecture, differentiators, issue flow, and roadmap.
+- [Verified autonomy](./docs/autonomy.md) — setup, commands, gates, worker and
+  scheduler recovery, state paths, refinement, Python skills, and capability
+  boundaries.
 - [EvalFly overview](./docs/evalfly/README.md) — current EvalFly modes, status,
   and boundaries.
 - [EvalFly modes](./docs/evalfly/modes.md) — normal, advisory, manual, local

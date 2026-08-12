@@ -222,6 +222,27 @@
 					}
 				]
 			}
+		},
+		{
+			"schema_version": "evalfly.case.v1",
+			"case_id": "specsafe-recovery-regression-exists",
+			"title": "SpecSafe recovery regression suite exists",
+			"suite": "smoke",
+			"risk_tier": "critical",
+			"task_type": "test_contract",
+			"source": { "kind": "project_eval_repo" },
+			"privacy": { "classification": "public", "sanitized": true },
+			"expected": {
+				"success_criteria": [
+					"The SpecSafe CLI regression suite exists at test/specsafe-cli.test.ts; C2a and C2b are executed by the Bun suite, not by this existence assertion."
+				]
+			},
+			"judge": {
+				"type": "deterministic",
+				"assertions": [
+					{ "type": "file_exists", "path": "test/specsafe-cli.test.ts" }
+				]
+			}
 		}
 	]
 }
