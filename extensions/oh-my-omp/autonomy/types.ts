@@ -56,6 +56,10 @@ export interface AutonomyTerminalIntent {
 	commandId: string;
 	requestedAt: string;
 }
+export interface AutonomyVerificationLease {
+	token: string;
+	startedAt: string;
+}
 
 export interface AutonomyRun {
 	schemaVersion: 1;
@@ -75,6 +79,7 @@ export interface AutonomyRun {
 	updatedAt: string;
 	lastError?: string;
 	terminalIntent?: AutonomyTerminalIntent;
+	verificationLease?: AutonomyVerificationLease;
 }
 
 export interface StartAutonomyArgs {

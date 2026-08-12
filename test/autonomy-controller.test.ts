@@ -372,6 +372,45 @@ describe("AutonomyController", () => {
 			(await controller.finalizeTerminalIntent("command-pending")).status,
 		).toBe("cancelled");
 	});
+	test("fences terminal success while verification is running", async () => {
+		const { controller } = await createHarness();
+		const started = await startRun(controller);
+		await controller.bindNativeGoal(
+			{ id: "goal-verification-fence", objective: started.task },
+			started.id,
+		);
+		for (const gate of (await controller.get())?.gates ?? []) {
+			await controller.recordGate({
+				gateId: gate.id,
+				status: "pass",
+				evidence: `before-verification:${gate.id}`,
+				reporter:
+					gate.id === "native-goal" ? "native-goal-event" : "host-verifier",
+				attempt: 1,
+				artifactRevision: 0,
+			});
+		}
+		await controller.beginVerification(
+			started.id,
+			{ attempt: 1, artifactRevision: 0 },
+			"verification-token",
+		);
+
+		await expect(
+			controller.requestTerminalIntent("succeeded", "command-success"),
+		).rejects.toThrow("verification is running");
+		await controller.recordCurrentArtifactRevision(
+			"late-verifier-mutation",
+			"verification-token",
+		);
+		const current = await controller.get();
+		expect(current?.verificationLease).toBeUndefined();
+		expect(current?.terminalIntent).toBeUndefined();
+		expect(current?.artifactRevision).toBe(1);
+		expect(current?.gates.every((gate) => gate.status === "pending")).toBe(
+			true,
+		);
+	});
 
 	test("refreshes cross-process finalization before starting the next run", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pantheon-autonomy-refresh-"));

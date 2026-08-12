@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, readlink } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -446,10 +446,15 @@ export class AutonomyRuntime {
 				"Cannot verify autonomy from a session that does not own the run",
 			);
 		}
-		await controller.beginVerification(state.id, {
-			attempt: state.attempt,
-			artifactRevision: state.artifactRevision,
-		});
+		const verificationToken = randomUUID();
+		await controller.beginVerification(
+			state.id,
+			{
+				attempt: state.attempt,
+				artifactRevision: state.artifactRevision,
+			},
+			verificationToken,
+		);
 		let receipt: VerificationReceipt;
 		try {
 			receipt = await this.verifier.verify(
@@ -467,6 +472,7 @@ export class AutonomyRuntime {
 								: String(error),
 						)
 						.digest("hex")}`,
+					verificationToken,
 				);
 			} catch (invalidationError) {
 				this.pi.logger.warn(
@@ -481,9 +487,10 @@ export class AutonomyRuntime {
 		}
 		const evidenceState =
 			receipt.artifactHash === undefined
-				? state
+				? await controller.clearCurrentVerification(verificationToken)
 				: await controller.recordCurrentArtifactRevision(
 						`verification:${receipt.artifactHash}`,
+						verificationToken,
 					);
 		if (
 			evidenceState.id !== state.id ||

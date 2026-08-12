@@ -1183,10 +1183,11 @@ describe("autonomy extension", () => {
 			evidence: "command:stale:exit:0",
 		});
 		await expect(verification).rejects.toThrow("run changed");
+		const current = await store.load();
 		expect(
-			(await store.load())?.gates.find((gate) => gate.id === "verification")
-				?.status,
+			current?.gates.find((gate) => gate.id === "verification")?.status,
 		).toBe("pending");
+		expect(current?.verificationLease).toBeUndefined();
 	});
 
 	test("invalidates gate evidence when verification mutates artifacts", async () => {
@@ -1427,6 +1428,14 @@ describe("autonomy extension", () => {
 			},
 			replacement.id,
 		);
+		expect((await controller.get())?.verificationLease).toBeDefined();
+		await expect(
+			controller.requestTerminalIntent(
+				"succeeded",
+				"replacement-success",
+				replacement.id,
+			),
+		).rejects.toThrow("verification is running");
 		release.resolve();
 
 		await expect(verification).rejects.toThrow("changed");

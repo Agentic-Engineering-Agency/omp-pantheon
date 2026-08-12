@@ -85,6 +85,12 @@ function terminalEligibilityError(
 	state: AutonomyRun,
 	status: AutonomyTerminalStatus,
 ): string | null {
+	if (
+		state.verificationLease !== undefined &&
+		(status === "succeeded" || status === "failed")
+	) {
+		return "Cannot finalize autonomy while verification is running";
+	}
 	if (status === "succeeded" && !completionDecision(state).completed) {
 		return "Cannot mark autonomy succeeded without current gate evidence";
 	}
@@ -180,6 +186,7 @@ export class AutonomyController {
 				attempt: 1,
 				artifactRevision: 0,
 			})),
+			verificationLease: existing?.verificationLease,
 			createdAt: timestamp,
 			updatedAt: timestamp,
 		};
@@ -299,7 +306,12 @@ export class AutonomyController {
 	async beginVerification(
 		expectedRunId: string,
 		expected: { attempt: number; artifactRevision: number },
+		token: string,
 	): Promise<AutonomyRun> {
+		const normalizedToken = token.trim();
+		if (normalizedToken.length === 0) {
+			throw new AutonomyTransitionError("Verification token must not be empty");
+		}
 		return this.store.update(expectedRunId, (state) => {
 			this.assertMutableState(
 				state,
@@ -307,6 +319,11 @@ export class AutonomyController {
 				false,
 				expectedRunId,
 			);
+			if (state.verificationLease !== undefined) {
+				throw new AutonomyTransitionError(
+					"Another autonomy verification is already running",
+				);
+			}
 			if (
 				state.attempt !== expected.attempt ||
 				state.artifactRevision !== expected.artifactRevision
@@ -327,12 +344,32 @@ export class AutonomyController {
 			return {
 				...state,
 				revision: state.revision + 1,
+				verificationLease: {
+					token: normalizedToken,
+					startedAt: timestamp,
+				},
 				gates: state.gates.map((gate, index) =>
 					index === gateIndex
 						? resetGate(gate, state.attempt, state.artifactRevision)
 						: gate,
 				),
 				updatedAt: timestamp,
+			};
+		});
+	}
+
+	async clearCurrentVerification(token: string): Promise<AutonomyRun> {
+		return this.store.updateCurrent((state) => {
+			if (state.verificationLease?.token !== token) {
+				throw new AutonomyTransitionError(
+					"Verification lease changed before it could be cleared",
+				);
+			}
+			return {
+				...state,
+				revision: state.revision + 1,
+				verificationLease: undefined,
+				updatedAt: this.now(),
 			};
 		});
 	}
@@ -380,26 +417,46 @@ export class AutonomyController {
 	}
 	async recordCurrentArtifactRevision(
 		artifactHash: string,
+		verificationToken?: string,
 	): Promise<AutonomyRun> {
 		const normalizedHash = artifactHash.trim();
 		if (normalizedHash.length === 0) {
 			throw new AutonomyTransitionError("Artifact hash must not be empty");
 		}
 		return this.store.updateCurrent((state) => {
-			this.assertMutableState(
-				state,
-				"record an artifact revision",
-				false,
-				state.id,
-			);
+			if (
+				verificationToken !== undefined &&
+				state.verificationLease?.token !== verificationToken
+			) {
+				throw new AutonomyTransitionError(
+					"Verification lease changed before artifact invalidation",
+				);
+			}
+			if (state.status !== "cancelled" || verificationToken === undefined) {
+				this.assertMutableState(
+					state,
+					"record an artifact revision",
+					verificationToken !== undefined,
+					state.id,
+				);
+			}
 			const timestamp = this.now();
 			const artifactRevision = state.artifactRevision + 1;
 			return {
 				...state,
-				status: state.status === "paused" ? "paused" : "running",
+				status:
+					state.status === "paused" || state.status === "cancelled"
+						? state.status
+						: "running",
 				revision: state.revision + 1,
 				artifactRevision,
 				artifactHash: normalizedHash,
+				terminalIntent:
+					verificationToken === undefined ? state.terminalIntent : undefined,
+				verificationLease:
+					state.verificationLease?.token === verificationToken
+						? undefined
+						: state.verificationLease,
 				gates: state.gates.map((gate) =>
 					resetGate(gate, state.attempt, artifactRevision),
 				),

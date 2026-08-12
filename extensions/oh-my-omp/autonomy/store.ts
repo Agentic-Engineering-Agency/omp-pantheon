@@ -297,7 +297,13 @@ export class AutonomyStore {
 			(state.lastError !== undefined && typeof state.lastError !== "string") ||
 			(state.terminalIntent !== undefined &&
 				((state.status !== "running" && state.status !== "waiting") ||
-					!this.isValidTerminalIntent(state.terminalIntent)))
+					!this.isValidTerminalIntent(state.terminalIntent))) ||
+			(state.verificationLease !== undefined &&
+				(typeof state.verificationLease !== "object" ||
+					state.verificationLease === null ||
+					typeof state.verificationLease.token !== "string" ||
+					state.verificationLease.token.trim().length === 0 ||
+					!Number.isFinite(Date.parse(state.verificationLease.startedAt))))
 		) {
 			throw new AutonomyStoreError(`Autonomy ${source} has an invalid shape`);
 		}
