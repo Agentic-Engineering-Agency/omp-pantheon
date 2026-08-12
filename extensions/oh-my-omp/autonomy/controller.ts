@@ -299,6 +299,7 @@ export class AutonomyController {
 	async recordArtifactRevision(
 		artifactHash: string,
 		expectedRunId?: string,
+		expected?: { attempt: number; artifactRevision: number },
 	): Promise<AutonomyRun> {
 		const normalizedHash = artifactHash.trim();
 		if (normalizedHash.length === 0) {
@@ -312,6 +313,15 @@ export class AutonomyController {
 				false,
 				expectedId,
 			);
+			if (
+				expected !== undefined &&
+				(state.attempt !== expected.attempt ||
+					state.artifactRevision !== expected.artifactRevision)
+			) {
+				throw new AutonomyTransitionError(
+					`Cannot record an artifact revision: expected attempt ${expected.attempt} artifact revision ${expected.artifactRevision}, found attempt ${state.attempt} artifact revision ${state.artifactRevision}`,
+				);
+			}
 			const timestamp = this.now();
 			const artifactRevision = state.artifactRevision + 1;
 			return {

@@ -155,7 +155,7 @@ async function fingerprintGitArtifacts(cwd: string): Promise<string> {
 			hash.update("\0symlink\0");
 			hash.update(await readlink(absolutePath));
 		} else if (metadata.isFile()) {
-			hash.update("\0file\0");
+			hash.update(`\0file:${metadata.mode & 0o111}\0`);
 			await updateHashFromStream(hash, Bun.file(absolutePath).stream());
 		} else {
 			hash.update(`\0other:${metadata.mode}\0`);
@@ -195,6 +195,7 @@ const defaultVerificationRunner: VerificationRunner = {
 				if (terminationPromise !== null) await terminationPromise;
 				throw new DOMException("Autonomy verification aborted", "AbortError");
 			}
+			await terminate();
 			const afterArtifacts = await fingerprintGitArtifacts(cwd);
 			return {
 				status: exitCode === 0 ? "pass" : "fail",
@@ -456,6 +457,10 @@ export class AutonomyRuntime {
 				: await controller.recordArtifactRevision(
 						`verification:${receipt.artifactHash}`,
 						state.id,
+						{
+							attempt: state.attempt,
+							artifactRevision: state.artifactRevision,
+						},
 					);
 		return controller.recordGate(
 			{

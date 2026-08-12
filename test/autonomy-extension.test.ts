@@ -1,5 +1,6 @@
 import { watch } from "node:fs";
 import {
+	chmod,
 	mkdir,
 	mkdtemp,
 	readFile,
@@ -1221,6 +1222,199 @@ describe("autonomy extension", () => {
 		expect(
 			state?.gates.find((gate) => gate.id === "verification"),
 		).toMatchObject({ status: "pass", artifactRevision: 1 });
+	});
+
+	test("rejects a mutating verification receipt after a concurrent artifact write", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-verify-race-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-verify-race-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const sessionFile = join(cwd, "session.jsonl");
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify() {
+							entered.resolve();
+							await release.promise;
+							return {
+								status: "pass",
+								evidence: "command:mutating:exit:0",
+								artifactHash: "verified-before-concurrent-write",
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Fence verifier race" --max-attempts=2',
+			extension.ctx,
+		);
+		const verification = extension.tools.autonomy_gate?.execute(
+			"mutating-verification-race",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		await entered.promise;
+		await extension.handlers.tool_result?.[0]?.(
+			{
+				toolCallId: "concurrent-write",
+				toolName: "write",
+				input: { path: "changed-after-verification.txt" },
+				isError: false,
+			},
+			extension.ctx,
+		);
+		release.resolve();
+
+		await expect(verification).rejects.toThrow("expected attempt");
+		const state = await new AutonomyStore(cwd, {
+			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+		}).load();
+		expect(state?.artifactRevision).toBe(1);
+		expect(state?.gates.every((gate) => gate.status === "pending")).toBe(true);
+	});
+
+	test("invalidates evidence when verification changes untracked executable mode", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-verify-mode-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-verify-mode-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const sessionFile = join(cwd, "session.jsonl");
+		const script = join(cwd, "tool.sh");
+		await writeFile(script, "#!/bin/sh\nexit 0\n");
+		await chmod(script, 0o644);
+		const initialize = Bun.spawn({
+			cmd: ["git", "init", "-b", "main"],
+			cwd,
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		expect(await initialize.exited).toBe(0);
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(pi, undefined, {
+					stateHome,
+					agentdFactory: () => ({
+						async start() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async status() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async stop() {
+							return { state: "stopped", restartCount: 0 };
+						},
+						close() {},
+					}),
+				}),
+			{ cwd, sessionFile },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Verify mode" --max-attempts=2 --verify="chmod +x tool.sh"',
+			extension.ctx,
+		);
+
+		await extension.tools.autonomy_gate?.execute(
+			"mode-verification",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+
+		const state = await new AutonomyStore(cwd, {
+			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+		}).load();
+		expect(state?.artifactRevision).toBe(1);
+		expect(
+			state?.gates.find((gate) => gate.id === "verification"),
+		).toMatchObject({ status: "pass", artifactRevision: 1 });
+	});
+
+	test("kills verification descendants before recording a receipt", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-verify-descendant-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-verify-descendant-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const sessionFile = join(cwd, "session.jsonl");
+		const marker = join(cwd, "delayed-write.txt");
+		const initialize = Bun.spawn({
+			cmd: ["git", "init", "-b", "main"],
+			cwd,
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		expect(await initialize.exited).toBe(0);
+		const delayedWriter = [
+			"const fs = require('node:fs');",
+			`setTimeout(() => fs.writeFileSync(${JSON.stringify(marker)}, 'late'), 250);`,
+		].join("");
+		const verificationCommand = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(delayedWriter)} &`;
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(pi, undefined, {
+					stateHome,
+					agentdFactory: () => ({
+						async start() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async status() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async stop() {
+							return { state: "stopped", restartCount: 0 };
+						},
+						close() {},
+					}),
+				}),
+			{ cwd, sessionFile },
+		);
+		await extension.commands.autonomy?.handler(
+			`start "Fence descendants" --max-attempts=2 --verify=${JSON.stringify(verificationCommand)}`,
+			extension.ctx,
+		);
+
+		await extension.tools.autonomy_gate?.execute(
+			"descendant-verification",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		await Bun.sleep(400);
+
+		expect(await Bun.file(marker).exists()).toBe(false);
+		const state = await new AutonomyStore(cwd, {
+			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+		}).load();
+		expect(
+			state?.gates.find((gate) => gate.id === "verification")?.status,
+		).toBe("pass");
 	});
 
 	test("aborted verification before launch records no receipt", async () => {
