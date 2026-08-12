@@ -36,14 +36,15 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
   command-bound terminal intent, flushes the session, publishes its persistence
   receipt, and acknowledges the command before finalizing the objective. Only
   the journal finalizer/failure path may clear pending terminal intent; external
-  pause/cancel stops the worker, reloads authoritative state, verifies the
-  original run still owns the transition, and reconciles any command created
-  during the stop before applying an ID-scoped transition. Other terminal paths
-  cannot bypass it. Missing, queued, failed, uncertain, or orphaned claimed
-  commands fail the objective instead of being replayed. Resident run/command
-  identity is shared across OMP's cache-busted module identities. The old worker
-  exits before another claim on terminal state, missing state, or run ownership
-  loss. External runtimes reload final state across process boundaries.
+  pause/cancel/success/failure paths stop the worker, reload authoritative
+  state, verify the original run still owns the transition, and reconcile any
+  command created during the stop before applying an ID-scoped transition.
+  Other terminal paths cannot bypass it. Missing, queued, failed, uncertain, or
+  orphaned claimed commands fail the objective instead of being replayed.
+  Resident run/command identity is shared across OMP's cache-busted module
+  identities. The old worker exits before another claim on terminal state,
+  missing state, or run ownership loss. External runtimes reload final state
+  across process boundaries.
 - Added approval-gated refinement and isolated Python skill contracts.
 - Added capability adapters for JSON-only kernel checkpoints and retained
   subagents. Both report unsupported on stock OMP 17.2.14 because the required

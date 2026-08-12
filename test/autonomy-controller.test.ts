@@ -156,6 +156,27 @@ describe("AutonomyController", () => {
 		});
 	});
 
+	test("scopes direct terminalization to the expected run", async () => {
+		const { controller, store } = await createHarness();
+		const original = await startRun(controller, 1);
+		await controller.cancel();
+		const replacementController = new AutonomyController(store, {
+			createId: () => "run-2",
+		});
+		await startRun(replacementController, 1);
+
+		await expect(controller.markSucceeded(original.id)).rejects.toThrow(
+			"autonomy run changed",
+		);
+		await expect(
+			controller.markFailedAtAttemptBound(original.id),
+		).rejects.toThrow("autonomy run changed");
+		expect(await store.load()).toMatchObject({
+			id: "run-2",
+			status: "running",
+		});
+	});
+
 	test("requires every gate to pass for the current attempt and artifact", async () => {
 		const { controller } = await createHarness();
 		await startRun(controller);

@@ -1520,6 +1520,104 @@ describe("autonomy extension", () => {
 			"info:Autonomy paused.",
 		);
 
+		const replacementSuccess = await createExternalExtension(
+			"external-replacement-success",
+			"Fence replacement from success",
+			2,
+		);
+		await replacementSuccess.extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "replacement-success-goal",
+					objective: "Fence replacement from success",
+					status: "active",
+				},
+			},
+			replacementSuccess.extension.ctx,
+		);
+		await replacementSuccess.extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "replacement-success-goal",
+					objective: "Fence replacement from success",
+					status: "complete",
+				},
+			},
+			replacementSuccess.extension.ctx,
+		);
+		await replacementSuccess.extension.tools.autonomy_gate?.execute(
+			"replacement-success-verification",
+			{},
+			undefined,
+			undefined,
+			replacementSuccess.extension.ctx,
+		);
+		replacementSuccess.setStopAction(async () => {
+			await replacementSuccess.controller.cancel();
+			await new AutonomyController(replacementSuccess.store, {
+				createId: () => "replacement-success-run",
+			}).start({
+				task: "Replacement success run",
+				maxAttempts: 2,
+				verificationCommand: "bun test",
+				gates: [
+					{
+						id: "native-goal",
+						label: "OMP native goal",
+						requirement: { kind: "native-goal" },
+					},
+				],
+			});
+		});
+		await expect(
+			replacementSuccess.extension.handlers.agent_end?.[0]?.(
+				{ messages: [] },
+				replacementSuccess.extension.ctx,
+			),
+		).rejects.toThrow("Autonomy run changed");
+		expect(await replacementSuccess.store.load()).toMatchObject({
+			id: "replacement-success-run",
+			status: "running",
+		});
+		expect(replacementSuccess.extension.logs).not.toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+
+		const replacementFailure = await createExternalExtension(
+			"external-replacement-failure",
+			"Fence replacement from failure",
+		);
+		replacementFailure.setStopAction(async () => {
+			await replacementFailure.controller.cancel();
+			await new AutonomyController(replacementFailure.store, {
+				createId: () => "replacement-failure-run",
+			}).start({
+				task: "Replacement failure run",
+				maxAttempts: 1,
+				verificationCommand: "bun test",
+				gates: [
+					{
+						id: "native-goal",
+						label: "OMP native goal",
+						requirement: { kind: "native-goal" },
+					},
+				],
+			});
+		});
+		await expect(
+			replacementFailure.extension.handlers.agent_end?.[0]?.(
+				{ messages: [] },
+				replacementFailure.extension.ctx,
+			),
+		).rejects.toThrow("Autonomy run changed");
+		expect(await replacementFailure.store.load()).toMatchObject({
+			id: "replacement-failure-run",
+			status: "running",
+		});
+		expect(replacementFailure.extension.logs).not.toContain(
+			"Autonomy run failed at its maximum attempt bound",
+		);
+
 		const success = await createExternalExtension(
 			"external-pending-success",
 			"External pending success",

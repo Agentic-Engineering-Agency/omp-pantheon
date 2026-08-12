@@ -372,7 +372,25 @@ export class AutonomyRuntime {
 				return;
 			}
 			await this.stopAgentdAndRequireTerminal(state.id);
-			await controller.markSucceeded();
+			const stoppedState = await this.requireRun(
+				controller,
+				state.id,
+				"mark completion",
+			);
+			const reconciled =
+				await this.reconcilePendingTerminalAfterStop(stoppedState);
+			if (reconciled !== null) {
+				if (reconciled.status === "succeeded") {
+					this.pi.logger.info(
+						"Autonomy run succeeded after objective gates passed",
+					);
+					return;
+				}
+				throw new AutonomyTransitionError(
+					`Pending terminal transition resolved as ${reconciled.status}; completion was not applied`,
+				);
+			}
+			await controller.markSucceeded(state.id);
 			this.pi.logger.info(
 				"Autonomy run succeeded after objective gates passed",
 			);
@@ -387,7 +405,25 @@ export class AutonomyRuntime {
 				return;
 			}
 			await this.stopAgentdAndRequireTerminal(state.id);
-			await controller.markFailedAtAttemptBound();
+			const stoppedState = await this.requireRun(
+				controller,
+				state.id,
+				"mark attempt-bound failure",
+			);
+			const reconciled =
+				await this.reconcilePendingTerminalAfterStop(stoppedState);
+			if (reconciled !== null) {
+				if (reconciled.status === "failed") {
+					this.pi.logger.warn(
+						"Autonomy run failed at its maximum attempt bound",
+					);
+					return;
+				}
+				throw new AutonomyTransitionError(
+					`Pending terminal transition resolved as ${reconciled.status}; attempt-bound failure was not applied`,
+				);
+			}
+			await controller.markFailedAtAttemptBound(state.id);
 			this.pi.logger.warn("Autonomy run failed at its maximum attempt bound");
 			return;
 		}

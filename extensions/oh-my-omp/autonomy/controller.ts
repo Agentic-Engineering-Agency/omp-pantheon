@@ -289,8 +289,12 @@ export class AutonomyController {
 		return completionDecision(await this.requireMutable("assess completion"));
 	}
 
-	async markSucceeded(): Promise<AutonomyRun> {
-		const state = await this.requireMutable("mark completion");
+	async markSucceeded(expectedRunId?: string): Promise<AutonomyRun> {
+		const state = await this.requireMutable(
+			"mark completion",
+			false,
+			expectedRunId,
+		);
 		const error = terminalEligibilityError(state, "succeeded");
 		if (error !== null) {
 			throw new AutonomyTransitionError(error);
@@ -313,8 +317,12 @@ export class AutonomyController {
 		};
 	}
 
-	async markFailedAtAttemptBound(): Promise<AutonomyRun> {
-		const state = await this.requireMutable("mark attempt-bound failure");
+	async markFailedAtAttemptBound(expectedRunId?: string): Promise<AutonomyRun> {
+		const state = await this.requireMutable(
+			"mark attempt-bound failure",
+			false,
+			expectedRunId,
+		);
 		const error = terminalEligibilityError(state, "failed");
 		if (error !== null) {
 			throw new AutonomyTransitionError(error);
