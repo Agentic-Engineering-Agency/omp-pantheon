@@ -56,8 +56,10 @@ export interface AutonomyTerminalIntent {
 	commandId: string;
 	requestedAt: string;
 }
+
 export interface AutonomyVerificationLease {
 	token: string;
+	ownerPid: number;
 	startedAt: string;
 }
 

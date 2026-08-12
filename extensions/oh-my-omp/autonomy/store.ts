@@ -303,6 +303,8 @@ export class AutonomyStore {
 					state.verificationLease === null ||
 					typeof state.verificationLease.token !== "string" ||
 					state.verificationLease.token.trim().length === 0 ||
+					!Number.isInteger(state.verificationLease.ownerPid) ||
+					state.verificationLease.ownerPid < 1 ||
 					!Number.isFinite(Date.parse(state.verificationLease.startedAt))))
 		) {
 			throw new AutonomyStoreError(`Autonomy ${source} has an invalid shape`);

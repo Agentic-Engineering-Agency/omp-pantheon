@@ -13,6 +13,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import {
 	AutonomyController,
+	type AutonomyControllerOptions,
 	AutonomyTransitionError,
 } from "../extensions/oh-my-omp/autonomy/controller";
 import { AutonomyStore } from "../extensions/oh-my-omp/autonomy/store";
@@ -20,7 +21,7 @@ import type { AutonomyRun } from "../extensions/oh-my-omp/autonomy/types";
 
 const roots: string[] = [];
 
-async function createHarness() {
+async function createHarness(options: AutonomyControllerOptions = {}) {
 	const root = await mkdtemp(join(tmpdir(), "pantheon-autonomy-"));
 	roots.push(root);
 	let timestamp = Date.parse("2026-08-11T12:00:00.000Z");
@@ -28,6 +29,7 @@ async function createHarness() {
 	const controller = new AutonomyController(store, {
 		now: () => new Date(timestamp++).toISOString(),
 		createId: () => "run-1",
+		...options,
 	});
 	return { controller, root, store };
 }
@@ -410,6 +412,40 @@ describe("AutonomyController", () => {
 		expect(current?.gates.every((gate) => gate.status === "pending")).toBe(
 			true,
 		);
+	});
+
+	test("reclaims an orphaned verification lease and invalidates evidence", async () => {
+		const { controller } = await createHarness({
+			isProcessAlive: () => false,
+		});
+		const started = await startRun(controller);
+		await controller.beginVerification(
+			started.id,
+			{ attempt: 1, artifactRevision: 0 },
+			"orphaned-token",
+		);
+
+		const reclaimed = await controller.beginVerification(
+			started.id,
+			{ attempt: 1, artifactRevision: 0 },
+			"replacement-token",
+		);
+
+		expect(reclaimed.artifactRevision).toBe(1);
+		expect(reclaimed.artifactHash).toBe("orphaned-verification:orphaned-token");
+		expect(reclaimed.verificationLease).toMatchObject({
+			token: "replacement-token",
+			ownerPid: process.pid,
+		});
+		expect(reclaimed.gates.every((gate) => gate.status === "pending")).toBe(
+			true,
+		);
+		await expect(
+			controller.recordCurrentArtifactRevision(
+				"stale-orphaned-result",
+				"orphaned-token",
+			),
+		).rejects.toThrow("lease changed");
 	});
 
 	test("refreshes cross-process finalization before starting the next run", async () => {

@@ -16,6 +16,15 @@ const TERMINAL_STATUSES: Partial<Record<AutonomyRun["status"], true>> = {
 	cancelled: true,
 };
 
+function processIsAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
 export class AutonomyTransitionError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -26,6 +35,7 @@ export class AutonomyTransitionError extends Error {
 export interface AutonomyControllerOptions {
 	now?: () => string;
 	createId?: () => string;
+	isProcessAlive?: (pid: number) => boolean;
 }
 
 function resetGate(
@@ -106,6 +116,7 @@ function terminalEligibilityError(
 export class AutonomyController {
 	private readonly now: () => string;
 	private readonly createId: () => string;
+	private readonly isProcessAlive: (pid: number) => boolean;
 
 	constructor(
 		private readonly store: AutonomyStore,
@@ -113,6 +124,7 @@ export class AutonomyController {
 	) {
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.createId = options.createId ?? (() => crypto.randomUUID());
+		this.isProcessAlive = options.isProcessAlive ?? processIsAlive;
 	}
 
 	async get(): Promise<AutonomyRun | null> {
@@ -319,7 +331,10 @@ export class AutonomyController {
 				false,
 				expectedRunId,
 			);
-			if (state.verificationLease !== undefined) {
+			const orphanedLease =
+				state.verificationLease !== undefined &&
+				!this.isProcessAlive(state.verificationLease.ownerPid);
+			if (state.verificationLease !== undefined && !orphanedLease) {
 				throw new AutonomyTransitionError(
 					"Another autonomy verification is already running",
 				);
@@ -341,16 +356,24 @@ export class AutonomyController {
 				);
 			}
 			const timestamp = this.now();
+			const artifactRevision = orphanedLease
+				? state.artifactRevision + 1
+				: state.artifactRevision;
 			return {
 				...state,
 				revision: state.revision + 1,
+				artifactRevision,
+				artifactHash: orphanedLease
+					? `orphaned-verification:${state.verificationLease?.token}`
+					: state.artifactHash,
 				verificationLease: {
 					token: normalizedToken,
+					ownerPid: process.pid,
 					startedAt: timestamp,
 				},
 				gates: state.gates.map((gate, index) =>
-					index === gateIndex
-						? resetGate(gate, state.attempt, state.artifactRevision)
+					orphanedLease || index === gateIndex
+						? resetGate(gate, state.attempt, artifactRevision)
 						: gate,
 				),
 				updatedAt: timestamp,
