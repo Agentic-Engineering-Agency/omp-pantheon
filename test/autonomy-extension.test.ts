@@ -988,6 +988,66 @@ describe("autonomy extension", () => {
 		expect(extension.notifications).not.toContain("Autonomy cancelled.");
 	});
 
+	test("accepts failed broker state as terminal for pause and cancellation", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-failed-stop-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-failed-stop-state-"),
+		);
+		roots.push(cwd, stateHome);
+		let stopCalls = 0;
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "failed", restartCount: 3 };
+							},
+							async stop() {
+								stopCalls += 1;
+								return { state: "failed", restartCount: 3 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile: join(cwd, "session.jsonl") },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Fence failed worker" --max-attempts=2',
+			extension.ctx,
+		);
+		const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+
+		await extension.commands.autonomy?.handler("pause", extension.ctx);
+
+		expect(
+			(await new AutonomyStore(cwd, { stateDirectory }).load())?.status,
+		).toBe("paused");
+		expect(extension.notifications.at(-1)).toBe("info:Autonomy paused.");
+
+		await extension.commands.autonomy?.handler("cancel", extension.ctx);
+
+		expect(
+			(await new AutonomyStore(cwd, { stateDirectory }).load())?.status,
+		).toBe("cancelled");
+		expect(extension.notifications.at(-1)).toBe("info:Autonomy cancelled.");
+		expect(stopCalls).toBe(2);
+	});
+
 	test("queues a persistent continuation and resumes its daemon in a new session", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-project-"));
 		const stateHome = await mkdtemp(join(tmpdir(), "pantheon-autonomy-state-"));

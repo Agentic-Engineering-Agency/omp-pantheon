@@ -34,7 +34,7 @@ const ACTIVE_STATUSES: Partial<Record<AutonomyRun["status"], true>> = {
 	waiting: true,
 };
 
-const TERMINAL_WORKER_STATES = new Set(["exited", "stopped"]);
+const TERMINAL_WORKER_STATES = new Set(["exited", "failed", "stopped"]);
 
 export interface VerificationReceipt {
 	status: "pass" | "fail";
