@@ -125,6 +125,11 @@ export class AutonomyController {
 				"Autonomy verification command must not be empty",
 			);
 		}
+		if (args.ownerSessionFile.trim().length === 0) {
+			throw new AutonomyTransitionError(
+				"Autonomy requires a persisted owner session file",
+			);
+		}
 		if (args.gates.length === 0) {
 			throw new AutonomyTransitionError(
 				"Autonomy requires at least one completion gate",
@@ -162,7 +167,7 @@ export class AutonomyController {
 			attempt: 1,
 			maxAttempts: args.maxAttempts,
 			verificationCommand: args.verificationCommand.trim(),
-			ownerSessionFile: args.ownerSessionFile,
+			ownerSessionFile: args.ownerSessionFile.trim(),
 			artifactRevision: 0,
 			gates: args.gates.map((gate) => ({
 				...gate,

@@ -67,7 +67,7 @@ export interface AutonomyRun {
 	maxAttempts: number;
 	artifactRevision: number;
 	verificationCommand: string;
-	ownerSessionFile?: string;
+	ownerSessionFile: string;
 	nativeGoalId?: string;
 	artifactHash?: string;
 	gates: AutonomyGateRecord[];
@@ -82,7 +82,7 @@ export interface StartAutonomyArgs {
 	maxAttempts: number;
 	gates: AutonomyGateDefinition[];
 	verificationCommand: string;
-	ownerSessionFile?: string;
+	ownerSessionFile: string;
 }
 
 export interface RecordAutonomyGateArgs {

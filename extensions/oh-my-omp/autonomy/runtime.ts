@@ -145,6 +145,11 @@ export class AutonomyRuntime {
 		maxAttempts: number,
 		verificationCommand: string,
 	): Promise<AutonomyRun> {
+		if (this.sessionFile === null) {
+			throw new AutonomyTransitionError(
+				"Autonomy requires a persisted OMP session; --no-session is unsupported",
+			);
+		}
 		const state = await (await this.requireController()).start({
 			task,
 			maxAttempts,
@@ -154,7 +159,7 @@ export class AutonomyRuntime {
 				this.stateHome,
 				this.options.now?.() ?? new Date().toISOString(),
 			),
-			ownerSessionFile: this.sessionFile ?? undefined,
+			ownerSessionFile: this.sessionFile,
 		});
 		await this.agentd?.start(state.id);
 		return state;
@@ -234,7 +239,10 @@ export class AutonomyRuntime {
 		return controller.cancel(state.id);
 	}
 
-	async runVerification(signal?: AbortSignal): Promise<AutonomyRun> {
+	async runVerification(
+		signal: AbortSignal | undefined,
+		ctx: Pick<ExtensionContext, "sessionManager">,
+	): Promise<AutonomyRun> {
 		const controller = await this.requireController();
 		const state = await controller.get();
 		if (state === null) {
@@ -250,7 +258,7 @@ export class AutonomyRuntime {
 				`Cannot verify autonomy while terminal transition for command ${state.terminalIntent.commandId} is pending`,
 			);
 		}
-		if (!this.ownsRunSession(state)) {
+		if (!this.ownsRunSession(state, ctx)) {
 			throw new AutonomyTransitionError(
 				"Cannot verify autonomy from a session that does not own the run",
 			);
@@ -273,7 +281,11 @@ export class AutonomyRuntime {
 		);
 	}
 
-	async onGoalUpdated(event: NativeGoalUpdatedEvent): Promise<void> {
+	async onGoalUpdated(
+		event: NativeGoalUpdatedEvent,
+		ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,
+	): Promise<void> {
+		if (!this.ownsRunProject(ctx)) return;
 		if (event.goal === null) return;
 		const controller = await this.requireController();
 		const state = await controller.get();
@@ -285,7 +297,7 @@ export class AutonomyRuntime {
 		) {
 			return;
 		}
-		if (!this.ownsRunSession(state)) return;
+		if (!this.ownsRunSession(state, ctx)) return;
 		if (state.nativeGoalId === undefined) {
 			if (
 				event.goal.status === "active" &&
@@ -320,7 +332,11 @@ export class AutonomyRuntime {
 		);
 	}
 
-	async onToolResult(event: ToolResultEvent): Promise<void> {
+	async onToolResult(
+		event: ToolResultEvent,
+		ctx: Pick<ExtensionContext, "cwd">,
+	): Promise<void> {
+		if (!this.ownsRunProject(ctx)) return;
 		if (
 			["read", "grep", "glob", "goal", "autonomy_gate"].includes(event.toolName)
 		) {
@@ -358,11 +374,15 @@ export class AutonomyRuntime {
 		);
 	}
 
-	async onAgentEnd(_event: AgentEndEvent): Promise<void> {
+	async onAgentEnd(
+		_event: AgentEndEvent,
+		ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,
+	): Promise<void> {
+		if (!this.ownsRunProject(ctx)) return;
 		const controller = await this.requireController();
 		const state = await controller.get();
 		if (state === null || ACTIVE_STATUSES[state.status] !== true) return;
-		if (!this.ownsRunSession(state)) return;
+		if (!this.ownsRunSession(state, ctx)) return;
 		if (state.terminalIntent !== undefined) {
 			this.pi.logger.debug(
 				`Autonomy terminal transition for command ${state.terminalIntent.commandId} remains pending`,
@@ -477,11 +497,10 @@ export class AutonomyRuntime {
 		state: AutonomyRun,
 		pendingGateIds: string[],
 	): Promise<void> {
-		if (this.cwd === null || this.sessionFile === null) {
-			this.pi.sendUserMessage(this.continuationPrompt(pendingGateIds), {
-				deliverAs: "followUp",
-			});
-			return;
+		if (this.cwd === null) {
+			throw new AutonomyTransitionError(
+				"Cannot schedule autonomy without an attached project",
+			);
 		}
 		const root = await prepareAutonomyRuntimeRoot(
 			this.cwd,
@@ -505,7 +524,7 @@ export class AutonomyRuntime {
 				id: `command-${suffix}`,
 				runId: state.id,
 				cwd: this.cwd,
-				sessionFile: state.ownerSessionFile ?? this.sessionFile,
+				sessionFile: state.ownerSessionFile,
 				prompt: this.continuationPrompt(pendingGateIds),
 				maxAttempts: 3,
 				createdAt: now,
@@ -513,10 +532,18 @@ export class AutonomyRuntime {
 		});
 	}
 
-	private ownsRunSession(state: AutonomyRun): boolean {
+	private ownsRunProject(ctx: Pick<ExtensionContext, "cwd">): boolean {
+		return this.cwd !== null && resolve(ctx.cwd) === this.cwd;
+	}
+
+	private ownsRunSession(
+		state: AutonomyRun,
+		ctx: Pick<ExtensionContext, "sessionManager">,
+	): boolean {
+		const sessionFile = ctx.sessionManager?.getSessionFile();
 		return (
-			state.ownerSessionFile === undefined ||
-			state.ownerSessionFile === this.sessionFile
+			sessionFile !== undefined &&
+			state.ownerSessionFile === resolve(sessionFile)
 		);
 	}
 
@@ -647,9 +674,9 @@ export function registerAutonomy(
 	pi.on("session_start", (_event, ctx) => runtime.attach(ctx));
 	pi.on("session_switch", (_event, ctx) => runtime.attach(ctx));
 	pi.on("session_branch", (_event, ctx) => runtime.attach(ctx));
-	pi.on("goal_updated", (event) => runtime.onGoalUpdated(event));
-	pi.on("agent_end", (event) => runtime.onAgentEnd(event));
-	pi.on("tool_result", (event) => runtime.onToolResult(event));
+	pi.on("goal_updated", (event, ctx) => runtime.onGoalUpdated(event, ctx));
+	pi.on("agent_end", (event, ctx) => runtime.onAgentEnd(event, ctx));
+	pi.on("tool_result", (event, ctx) => runtime.onToolResult(event, ctx));
 	pi.on("session_shutdown", () => runtime.close());
 	registerAutonomyCommands(pi, runtime);
 
@@ -662,7 +689,7 @@ export function registerAutonomy(
 		parameters: z.object({}),
 		async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
 			await runtime.attach(ctx);
-			const state = await runtime.runVerification(signal);
+			const state = await runtime.runVerification(signal, ctx);
 			const gate = state.gates.find(
 				(candidate) => candidate.id === "verification",
 			);

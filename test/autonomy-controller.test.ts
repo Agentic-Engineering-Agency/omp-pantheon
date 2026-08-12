@@ -37,6 +37,7 @@ async function startRun(controller: AutonomyController, maxAttempts = 3) {
 		task: "Ship verified autonomy",
 		maxAttempts,
 		verificationCommand: "bun test",
+		ownerSessionFile: "/tmp/pantheon-owner.jsonl",
 		gates: [
 			{
 				id: "native-goal",
@@ -85,6 +86,7 @@ describe("AutonomyController", () => {
 				task: "Ship verified autonomy",
 				maxAttempts: 3,
 				verificationCommand: "bun test",
+				ownerSessionFile: "/tmp/pantheon-owner.jsonl",
 				gates: [
 					{
 						id: "evalfly",
@@ -296,6 +298,7 @@ describe("AutonomyController", () => {
 			task: "Ship the next verified goal",
 			maxAttempts: 2,
 			verificationCommand: "bun test",
+			ownerSessionFile: "/tmp/pantheon-owner-2.jsonl",
 			gates: [
 				{
 					id: "verification",
@@ -365,6 +368,7 @@ describe("AutonomyController", () => {
 			task: "First cross-process run",
 			maxAttempts: 1,
 			verificationCommand: "true",
+			ownerSessionFile: "/tmp/pantheon-owner-1.jsonl",
 			gates: [
 				{
 					id: "verification",
@@ -392,6 +396,7 @@ describe("AutonomyController", () => {
 			task: "Second cross-process run",
 			maxAttempts: 1,
 			verificationCommand: "true",
+			ownerSessionFile: "/tmp/pantheon-owner-2.jsonl",
 			gates: [
 				{
 					id: "verification",

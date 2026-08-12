@@ -136,9 +136,15 @@ const registerTestAutonomy = (pi: never): unknown =>
 		{ stateHome: (cwd) => join(cwd, ".test-state") },
 	);
 
+async function loadTestState(cwd: string) {
+	return new AutonomyStore(cwd, {
+		stateDirectory: autonomyProjectStateRoot(cwd, join(cwd, ".test-state")),
+	}).load();
+}
+
 interface FakeExtensionOptions {
 	cwd?: string;
-	sessionFile?: string;
+	sessionFile?: string | null;
 }
 
 async function createFakeExtension(
@@ -189,12 +195,14 @@ async function createFakeExtension(
 		},
 	};
 	await register(pi as never);
+	const sessionFile =
+		options.sessionFile === undefined
+			? join(cwd, "session.jsonl")
+			: options.sessionFile;
 	const ctx: FakeContext = {
 		cwd,
 		sessionManager:
-			options.sessionFile === undefined
-				? undefined
-				: { getSessionFile: () => options.sessionFile as string },
+			sessionFile === null ? undefined : { getSessionFile: () => sessionFile },
 		ui: {
 			notify(message, level) {
 				notifications.push(`${level}:${message}`);
@@ -242,6 +250,56 @@ describe("autonomy extension", () => {
 		expect(messages.at(-1)).toContain("native OMP goal");
 		expect(notifications.at(-1)).toContain("running");
 		expect(notifications.at(-1)).toContain("attempt 1/2");
+	});
+
+	test("rejects start without a persisted OMP session", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-no-session-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-no-session-state-"),
+		);
+		roots.push(cwd, stateHome);
+		let starts = 0;
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify() {
+							return { status: "pass", evidence: "exit:0" };
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								starts += 1;
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile: null },
+		);
+
+		await extension.commands.autonomy?.handler(
+			'start "Must remain owned"',
+			extension.ctx,
+		);
+
+		expect(extension.notifications.at(-1)).toContain("persisted OMP session");
+		expect(starts).toBe(0);
+		expect(
+			await new AutonomyStore(cwd, {
+				stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+			}).load(),
+		).toBeNull();
 	});
 
 	test("completes only after native goal and verification evidence pass", async () => {
@@ -411,6 +469,107 @@ describe("autonomy extension", () => {
 		expect((await scheduler.list())[0]?.request.command.sessionFile).toBe(
 			ownerSession,
 		);
+	});
+
+	test("uses each event context after a same-runtime session switch", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-context-session-"),
+		);
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-context-session-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const ownerSession = join(cwd, "owner.jsonl");
+		const otherSession = join(cwd, "other.jsonl");
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify(_cwd, command) {
+							return {
+								status: "pass",
+								evidence: `command:${command}:exit:0`,
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile: ownerSession },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Context-owned objective" --max-attempts=2',
+			extension.ctx,
+		);
+		const otherCtx: FakeContext = {
+			...extension.ctx,
+			sessionManager: { getSessionFile: () => otherSession },
+		};
+		await extension.handlers.session_switch?.[0]?.({}, otherCtx);
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "other-goal",
+					objective: "Context-owned objective",
+					status: "active",
+				},
+			},
+			otherCtx,
+		);
+		const store = new AutonomyStore(cwd, {
+			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+		});
+		expect((await store.load())?.nativeGoalId).toBeUndefined();
+
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "owner-goal",
+					objective: "Context-owned objective",
+					status: "active",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "owner-goal",
+					objective: "Context-owned objective",
+					status: "complete",
+				},
+			},
+			extension.ctx,
+		);
+		await extension.tools.autonomy_gate?.execute(
+			"owner-verification",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		await extension.handlers.session_switch?.[0]?.({}, otherCtx);
+		await extension.handlers.agent_end?.[0]?.({ messages: [] }, extension.ctx);
+
+		expect(await store.load()).toMatchObject({
+			status: "succeeded",
+			nativeGoalId: "owner-goal",
+			ownerSessionFile: ownerSession,
+		});
 	});
 
 	test("rejects stale verification evidence after run replacement", async () => {
@@ -806,7 +965,11 @@ describe("autonomy extension", () => {
 		expect(extension.logs).not.toContain(
 			"Autonomy run succeeded after objective gates passed",
 		);
-		expect(extension.messages.at(-1)).toContain("evalfly");
+		expect((await loadTestState(extension.ctx.cwd))?.gates).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "evalfly", status: "pending" }),
+			]),
+		);
 	});
 
 	test("rejects malformed configured gate state before starting", async () => {
@@ -848,7 +1011,11 @@ describe("autonomy extension", () => {
 		expect(logs).not.toContain(
 			"Autonomy run succeeded after objective gates passed",
 		);
-		expect(messages.at(-1)).toContain("native-goal");
+		expect((await loadTestState(ctx.cwd))?.gates).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "native-goal", status: "pending" }),
+			]),
+		);
 	});
 
 	test("does not let model-facing tool parameters attest the native goal gate", async () => {
@@ -872,7 +1039,11 @@ describe("autonomy extension", () => {
 		expect(logs).not.toContain(
 			"Autonomy run succeeded after objective gates passed",
 		);
-		expect(messages.at(-1)).toContain("native-goal");
+		expect((await loadTestState(ctx.cwd))?.gates).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "native-goal", status: "pending" }),
+			]),
+		);
 	});
 
 	test("ignores completion promises and continues with missing gates", async () => {
@@ -886,7 +1057,11 @@ describe("autonomy extension", () => {
 		);
 		await commands.autonomy?.handler("status", ctx);
 
-		expect(messages.at(-1)).toContain("native-goal, verification");
+		expect(
+			(await loadTestState(ctx.cwd))?.gates.every(
+				(gate) => gate.status === "pending",
+			),
+		).toBe(true);
 		expect(notifications.at(-1)).toContain("attempt 2/2");
 		expect(notifications.at(-1)).not.toContain("succeeded");
 	});
@@ -1716,6 +1891,7 @@ describe("autonomy extension", () => {
 				task: "Replacement run",
 				maxAttempts: 2,
 				verificationCommand: "bun test",
+				ownerSessionFile: join(replacement.cwd, "replacement.jsonl"),
 				gates: [
 					{
 						id: "native-goal",
@@ -1781,6 +1957,10 @@ describe("autonomy extension", () => {
 				task: "Replacement success run",
 				maxAttempts: 2,
 				verificationCommand: "bun test",
+				ownerSessionFile: join(
+					replacementSuccess.cwd,
+					"replacement-success.jsonl",
+				),
 				gates: [
 					{
 						id: "native-goal",
@@ -1816,6 +1996,10 @@ describe("autonomy extension", () => {
 				task: "Replacement failure run",
 				maxAttempts: 1,
 				verificationCommand: "bun test",
+				ownerSessionFile: join(
+					replacementFailure.cwd,
+					"replacement-failure.jsonl",
+				),
 				gates: [
 					{
 						id: "native-goal",
@@ -2065,7 +2249,11 @@ describe("autonomy extension", () => {
 		expect(logs).not.toContain(
 			"Autonomy run succeeded after objective gates passed",
 		);
-		expect(messages.at(-1)).toContain("native-goal, verification");
+		expect(
+			(await loadTestState(ctx.cwd))?.gates.every(
+				(gate) => gate.status === "pending",
+			),
+		).toBe(true);
 	});
 
 	test("keeps native goal evidence across the goal control tool result", async () => {
@@ -2136,7 +2324,11 @@ describe("autonomy extension", () => {
 		expect(logs).not.toContain(
 			"Autonomy run succeeded after objective gates passed",
 		);
-		expect(messages.at(-1)).toContain("native-goal, verification");
+		expect(
+			(await loadTestState(ctx.cwd))?.gates.every(
+				(gate) => gate.status === "pending",
+			),
+		).toBe(true);
 	});
 
 	test("creates persistent autonomy state with private modes", async () => {

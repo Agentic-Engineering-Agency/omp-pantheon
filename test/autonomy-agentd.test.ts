@@ -66,6 +66,7 @@ async function createPendingTerminalIntent(commandId = "command-1") {
 		task: "Finish durably",
 		maxAttempts: 1,
 		verificationCommand: "true",
+		ownerSessionFile: "/tmp/session.jsonl",
 		gates: [
 			{
 				id: "verification",
@@ -210,6 +211,7 @@ describe("AutonomyWorker", () => {
 			task: "Original run",
 			maxAttempts: 1,
 			verificationCommand: "true",
+			ownerSessionFile: "/tmp/session.jsonl",
 			gates: [
 				{
 					id: "verification",
@@ -233,6 +235,7 @@ describe("AutonomyWorker", () => {
 						task: "Replacement run",
 						maxAttempts: 1,
 						verificationCommand: "true",
+						ownerSessionFile: "/tmp/replacement-session.jsonl",
 						gates: [
 							{
 								id: "verification",

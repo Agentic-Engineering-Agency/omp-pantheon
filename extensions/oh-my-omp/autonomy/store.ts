@@ -223,9 +223,8 @@ export class AutonomyStore {
 			state.gates.length === 0 ||
 			typeof state.verificationCommand !== "string" ||
 			state.verificationCommand.trim().length === 0 ||
-			(state.ownerSessionFile !== undefined &&
-				(typeof state.ownerSessionFile !== "string" ||
-					state.ownerSessionFile.trim().length === 0)) ||
+			typeof state.ownerSessionFile !== "string" ||
+			state.ownerSessionFile.trim().length === 0 ||
 			!Number.isFinite(Date.parse(state.createdAt)) ||
 			!Number.isFinite(Date.parse(state.updatedAt)) ||
 			(state.nativeGoalId !== undefined &&
