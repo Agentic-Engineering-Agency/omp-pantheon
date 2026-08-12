@@ -288,6 +288,29 @@ describe("AutonomyController", () => {
 		]);
 	});
 
+	test("only terminal reconciliation may clear a pending intent", async () => {
+		const { controller } = await createHarness();
+		await startRun(controller, 1);
+		await controller.requestTerminalIntent("cancelled", "command-pending");
+
+		for (const mutation of [
+			() => controller.pause(),
+			() => controller.cancel(),
+			() => controller.markSucceeded(),
+			() => controller.markFailedAtAttemptBound(),
+		]) {
+			await expect(mutation()).rejects.toThrow("terminal transition");
+		}
+		expect((await controller.get())?.terminalIntent).toMatchObject({
+			status: "cancelled",
+			commandId: "command-pending",
+		});
+
+		expect(
+			(await controller.finalizeTerminalIntent("command-pending")).status,
+		).toBe("cancelled");
+	});
+
 	test("refreshes cross-process finalization before starting the next run", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pantheon-autonomy-refresh-"));
 		roots.push(root);

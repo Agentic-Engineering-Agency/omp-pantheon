@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { AutonomyController } from "../extensions/oh-my-omp/autonomy/controller";
 import { CommandJournal } from "../extensions/oh-my-omp/autonomy/journal";
 import { registerAutonomy } from "../extensions/oh-my-omp/autonomy/runtime";
 import {
@@ -1329,6 +1330,211 @@ describe("autonomy extension", () => {
 			commandId: "resident-command",
 		});
 		expect(failure.stopCalls()).toBe(0);
+	});
+
+	test("external terminal paths cannot bypass a resident terminal intent", async () => {
+		const createExternalExtension = async (
+			prefix: string,
+			task: string,
+			maxAttempts = 1,
+		) => {
+			const cwd = await mkdtemp(join(tmpdir(), `pantheon-${prefix}-`));
+			const stateHome = await mkdtemp(
+				join(tmpdir(), `pantheon-${prefix}-state-`),
+			);
+			roots.push(cwd, stateHome);
+			let stops = 0;
+			const sessionFile = join(cwd, "session.jsonl");
+			const extension = await createFakeExtension(
+				(pi) =>
+					registerAutonomy(
+						pi,
+						{
+							async verify(_cwd, command) {
+								return {
+									status: "pass",
+									evidence: `command:${command}:exit:0`,
+								};
+							},
+						},
+						{
+							stateHome,
+							agentdFactory: () => ({
+								async start() {
+									return { state: "ready", restartCount: 0 };
+								},
+								async status() {
+									return { state: "ready", restartCount: 0 };
+								},
+								async stop() {
+									stops += 1;
+									return { state: "stopped", restartCount: 0 };
+								},
+								close() {},
+							}),
+						},
+					),
+				{ cwd, sessionFile },
+			);
+			await extension.commands.autonomy?.handler(
+				`start "${task}" --max-attempts=${maxAttempts}`,
+				extension.ctx,
+			);
+			const store = new AutonomyStore(cwd, {
+				stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+			});
+			const state = await store.load();
+			if (state === null) throw new Error("Expected autonomy state");
+			const controller = new AutonomyController(store);
+			const journal = new CommandJournal(
+				autonomyRuntimeRoot(cwd, state.id, stateHome),
+				{ expectedRunId: state.id, expectedCwd: cwd },
+			);
+			const workerCommand = (id: string) => ({
+				schemaVersion: 1 as const,
+				id,
+				runId: state.id,
+				cwd,
+				sessionFile,
+				prompt: "Continue the verified objective.",
+				maxAttempts: 3,
+				createdAt: "2026-08-11T23:45:00.000Z",
+			});
+			return {
+				controller,
+				cwd,
+				extension,
+				journal,
+				stateHome,
+				stopCalls: () => stops,
+				store,
+				workerCommand,
+			};
+		};
+
+		const pause = await createExternalExtension(
+			"external-pending-pause",
+			"External pending pause",
+		);
+		await pause.journal.enqueue(pause.workerCommand("pause-command"));
+		await pause.controller.requestTerminalIntent("cancelled", "pause-command");
+		await pause.extension.commands.autonomy?.handler(
+			"pause",
+			pause.extension.ctx,
+		);
+		expect(await pause.store.load()).toMatchObject({
+			status: "failed",
+			lastError:
+				"Terminal transition persistence is queued: command was not durably acknowledged",
+		});
+		expect(pause.stopCalls()).toBe(1);
+		expect(pause.extension.notifications.at(-1)).toContain(
+			"Pending terminal transition resolved as failed",
+		);
+
+		const cancel = await createExternalExtension(
+			"external-pending-cancel",
+			"External pending cancel",
+		);
+		await cancel.journal.enqueue(cancel.workerCommand("cancel-command"));
+		await cancel.journal.claimNext("resident-worker", 5_000);
+		await cancel.controller.requestTerminalIntent("paused", "cancel-command");
+		await cancel.extension.commands.autonomy?.handler(
+			"cancel",
+			cancel.extension.ctx,
+		);
+		expect((await cancel.journal.list())[0]?.status).toBe("uncertain");
+		expect((await cancel.store.load())?.status).toBe("failed");
+		expect(cancel.stopCalls()).toBe(1);
+		expect(cancel.extension.notifications.at(-1)).toContain(
+			"cancellation was not applied",
+		);
+
+		const success = await createExternalExtension(
+			"external-pending-success",
+			"External pending success",
+			2,
+		);
+		await success.extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "external-success-goal",
+					objective: "External pending success",
+					status: "active",
+				},
+			},
+			success.extension.ctx,
+		);
+		await success.extension.handlers.goal_updated?.[0]?.(
+			{
+				goal: {
+					id: "external-success-goal",
+					objective: "External pending success",
+					status: "complete",
+				},
+			},
+			success.extension.ctx,
+		);
+		await success.extension.tools.autonomy_gate?.execute(
+			"external-success-verification",
+			{},
+			undefined,
+			undefined,
+			success.extension.ctx,
+		);
+		await success.journal.enqueue(success.workerCommand("success-command"));
+		await success.controller.requestTerminalIntent(
+			"cancelled",
+			"success-command",
+		);
+		await success.extension.handlers.agent_end?.[0]?.(
+			{ messages: [] },
+			success.extension.ctx,
+		);
+		expect(await success.store.load()).toMatchObject({
+			status: "running",
+			terminalIntent: {
+				status: "cancelled",
+				commandId: "success-command",
+			},
+		});
+		expect(success.stopCalls()).toBe(0);
+		expect(success.extension.logs).not.toContain(
+			"Autonomy run succeeded after objective gates passed",
+		);
+
+		const failure = await createExternalExtension(
+			"external-pending-failure",
+			"External pending failure",
+		);
+		await failure.journal.enqueue(failure.workerCommand("failure-command"));
+		const failureClaim = await failure.journal.claimNext(
+			"resident-worker",
+			5_000,
+		);
+		if (failureClaim === null) throw new Error("Expected command claim");
+		await failure.journal.markUncertain(
+			failureClaim.command.id,
+			"resident-worker",
+			failureClaim.fencingToken,
+			"persistence interrupted",
+		);
+		await failure.controller.requestTerminalIntent("paused", "failure-command");
+		await failure.extension.handlers.agent_end?.[0]?.(
+			{ messages: [] },
+			failure.extension.ctx,
+		);
+		expect(await failure.store.load()).toMatchObject({
+			status: "running",
+			terminalIntent: {
+				status: "paused",
+				commandId: "failure-command",
+			},
+		});
+		expect(failure.stopCalls()).toBe(0);
+		expect(failure.extension.logs).not.toContain(
+			"Autonomy run failed at its maximum attempt bound",
+		);
 	});
 
 	test("queues a persistent continuation and resumes its daemon in a new session", async () => {

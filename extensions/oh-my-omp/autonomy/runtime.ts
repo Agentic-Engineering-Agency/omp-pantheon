@@ -13,6 +13,7 @@ import {
 	AutonomyAgentd,
 	currentAgentdCommandId,
 	isCurrentAgentdRun,
+	reconcileResidentTerminal,
 } from "./agentd";
 import { registerAutonomyCommands } from "./commands";
 import { AutonomyController, AutonomyTransitionError } from "./controller";
@@ -93,6 +94,7 @@ export interface AutonomyRuntimeOptions {
 
 export class AutonomyRuntime {
 	private controller: AutonomyController | null = null;
+	private store: AutonomyStore | null = null;
 	private agentd: AgentdClient | null = null;
 	private cwd: string | null = null;
 	private sessionFile: string | null = null;
@@ -125,9 +127,8 @@ export class AutonomyRuntime {
 			ctx.sessionManager === undefined && this.stateHome === undefined
 				? undefined
 				: await prepareAutonomyProjectStateRoot(this.cwd, this.stateHome);
-		this.controller = new AutonomyController(
-			new AutonomyStore(this.cwd, { stateDirectory }),
-		);
+		this.store = new AutonomyStore(this.cwd, { stateDirectory });
+		this.controller = new AutonomyController(this.store);
 		this.agentd =
 			ctx.sessionManager === undefined
 				? null
@@ -185,6 +186,13 @@ export class AutonomyRuntime {
 			return (await controller.get()) ?? state;
 		}
 		await this.stopAgentdAndRequireTerminal(state.id);
+		const reconciled = await this.reconcilePendingTerminalAfterStop(state);
+		if (reconciled !== null) {
+			if (reconciled.status === "paused") return reconciled;
+			throw new AutonomyTransitionError(
+				`Pending terminal transition resolved as ${reconciled.status}; pause was not applied`,
+			);
+		}
 		return controller.pause();
 	}
 
@@ -210,6 +218,13 @@ export class AutonomyRuntime {
 			return (await controller.get()) ?? state;
 		}
 		await this.stopAgentdAndRequireTerminal(state.id);
+		const reconciled = await this.reconcilePendingTerminalAfterStop(state);
+		if (reconciled !== null) {
+			if (reconciled.status === "cancelled") return reconciled;
+			throw new AutonomyTransitionError(
+				`Pending terminal transition resolved as ${reconciled.status}; cancellation was not applied`,
+			);
+		}
 		return controller.cancel();
 	}
 
@@ -222,6 +237,11 @@ export class AutonomyRuntime {
 		if (ACTIVE_STATUSES[state.status] !== true) {
 			throw new AutonomyTransitionError(
 				`Cannot verify autonomy while ${state.status}`,
+			);
+		}
+		if (state.terminalIntent !== undefined) {
+			throw new AutonomyTransitionError(
+				`Cannot verify autonomy while terminal transition for command ${state.terminalIntent.commandId} is pending`,
 			);
 		}
 		const receipt = await this.verifier.verify(
@@ -246,6 +266,7 @@ export class AutonomyRuntime {
 		if (
 			state === null ||
 			ACTIVE_STATUSES[state.status] !== true ||
+			state.terminalIntent !== undefined ||
 			!state.gates.some((gate) => gate.id === "native-goal")
 		) {
 			return;
@@ -292,6 +313,13 @@ export class AutonomyRuntime {
 		) {
 			return;
 		}
+		if (state.terminalIntent !== undefined) {
+			await controller.failTerminalIntent(
+				state.terminalIntent.commandId,
+				`Artifact mutation ${event.toolName} occurred while terminal persistence was pending`,
+			);
+			return;
+		}
 		const evidence = createHash("sha256")
 			.update(
 				JSON.stringify({
@@ -311,6 +339,12 @@ export class AutonomyRuntime {
 		const controller = await this.requireController();
 		const state = await controller.get();
 		if (state === null || ACTIVE_STATUSES[state.status] !== true) return;
+		if (state.terminalIntent !== undefined) {
+			this.pi.logger.debug(
+				`Autonomy terminal transition for command ${state.terminalIntent.commandId} remains pending`,
+			);
+			return;
+		}
 
 		for (const receipt of evaluateConfiguredHostGates(
 			this.cwd ?? "",
@@ -448,6 +482,39 @@ export class AutonomyRuntime {
 		}
 		await controller.requestTerminalIntent(status, commandId);
 		return true;
+	}
+
+	private async reconcilePendingTerminalAfterStop(
+		state: AutonomyRun,
+	): Promise<AutonomyRun | null> {
+		if (state.terminalIntent === undefined) return null;
+		if (this.cwd === null || this.store === null) {
+			throw new AutonomyTransitionError(
+				"Cannot reconcile terminal intent without attached private state",
+			);
+		}
+		const root = await prepareAutonomyRuntimeRoot(
+			this.cwd,
+			state.id,
+			this.stateHome,
+		);
+		const journal = new CommandJournal(root, {
+			expectedRunId: state.id,
+			expectedCwd: this.cwd,
+		});
+		await reconcileResidentTerminal(state.id, this.store, journal);
+		const reconciled = await (await this.requireController()).get();
+		if (reconciled === null) {
+			throw new AutonomyTransitionError(
+				"Autonomy state disappeared during terminal reconciliation",
+			);
+		}
+		if (reconciled.terminalIntent !== undefined) {
+			throw new AutonomyTransitionError(
+				`Terminal transition for command ${reconciled.terminalIntent.commandId} remains unresolved`,
+			);
+		}
+		return ACTIVE_STATUSES[reconciled.status] === true ? null : reconciled;
 	}
 
 	private async stopAgentdAndRequireTerminal(runId: string): Promise<void> {

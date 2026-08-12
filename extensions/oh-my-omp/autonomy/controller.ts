@@ -282,7 +282,6 @@ export class AutonomyController {
 				resetGate(gate, state.attempt, artifactRevision),
 			),
 			updatedAt: timestamp,
-			terminalIntent: undefined,
 		});
 	}
 
@@ -299,7 +298,6 @@ export class AutonomyController {
 		return this.persist({
 			...state,
 			status: "succeeded",
-			terminalIntent: undefined,
 			updatedAt: this.now(),
 		});
 	}
@@ -324,7 +322,6 @@ export class AutonomyController {
 		return this.persist({
 			...state,
 			status: "failed",
-			terminalIntent: undefined,
 			lastError: `Maximum attempts reached (${state.maxAttempts})`,
 			updatedAt: this.now(),
 		});
@@ -334,10 +331,25 @@ export class AutonomyController {
 		status: AutonomyTerminalStatus,
 		commandId: string,
 	): Promise<AutonomyRun> {
-		const state = await this.requireMutable("request a terminal transition");
+		const state = await this.requireMutable(
+			"request a terminal transition",
+			true,
+		);
 		if (commandId.trim().length === 0) {
 			throw new AutonomyTransitionError(
 				"Terminal transition command ID must not be empty",
+			);
+		}
+		const normalizedCommandId = commandId.trim();
+		if (state.terminalIntent !== undefined) {
+			if (
+				state.terminalIntent.commandId === normalizedCommandId &&
+				state.terminalIntent.status === status
+			) {
+				return state;
+			}
+			throw new AutonomyTransitionError(
+				`Terminal transition for command ${state.terminalIntent.commandId} is already pending`,
 			);
 		}
 		const error = terminalEligibilityError(state, status);
@@ -346,7 +358,7 @@ export class AutonomyController {
 			...state,
 			terminalIntent: {
 				status,
-				commandId: commandId.trim(),
+				commandId: normalizedCommandId,
 				requestedAt: this.now(),
 			},
 			updatedAt: this.now(),
@@ -354,7 +366,10 @@ export class AutonomyController {
 	}
 
 	async finalizeTerminalIntent(commandId: string): Promise<AutonomyRun> {
-		const state = await this.requireMutable("finalize a terminal transition");
+		const state = await this.requireMutable(
+			"finalize a terminal transition",
+			true,
+		);
 		const intent = state.terminalIntent;
 		if (intent === undefined || intent.commandId !== commandId) {
 			throw new AutonomyTransitionError(
@@ -386,7 +401,7 @@ export class AutonomyController {
 		commandId: string,
 		reason: string,
 	): Promise<AutonomyRun> {
-		const state = await this.requireMutable("fail a terminal transition");
+		const state = await this.requireMutable("fail a terminal transition", true);
 		if (
 			state.terminalIntent === undefined ||
 			state.terminalIntent.commandId !== commandId
@@ -414,7 +429,6 @@ export class AutonomyController {
 				...state,
 				status: "waiting",
 				updatedAt: this.now(),
-				terminalIntent: undefined,
 			});
 		}
 		return decision;
@@ -442,7 +456,6 @@ export class AutonomyController {
 				resetGate(gate, attempt, state.artifactRevision),
 			),
 			updatedAt: timestamp,
-			terminalIntent: undefined,
 			lastError: undefined,
 		});
 		return {
@@ -458,7 +471,6 @@ export class AutonomyController {
 		return this.persist({
 			...state,
 			status: "paused",
-			terminalIntent: undefined,
 			updatedAt: this.now(),
 		});
 	}
@@ -473,7 +485,6 @@ export class AutonomyController {
 		return this.persist({
 			...state,
 			status: "running",
-			terminalIntent: undefined,
 			updatedAt: this.now(),
 		});
 	}
@@ -483,7 +494,6 @@ export class AutonomyController {
 		return this.persist({
 			...state,
 			status: "cancelled",
-			terminalIntent: undefined,
 			updatedAt: this.now(),
 		});
 	}
@@ -496,11 +506,19 @@ export class AutonomyController {
 		return state;
 	}
 
-	private async requireMutable(action: string): Promise<AutonomyRun> {
+	private async requireMutable(
+		action: string,
+		allowTerminalIntent = false,
+	): Promise<AutonomyRun> {
 		const state = await this.requireState();
 		if (TERMINAL_STATUSES[state.status] === true) {
 			throw new AutonomyTransitionError(
 				`Cannot ${action}: autonomy run is ${state.status}`,
+			);
+		}
+		if (state.terminalIntent !== undefined && !allowTerminalIntent) {
+			throw new AutonomyTransitionError(
+				`Cannot ${action}: terminal transition for command ${state.terminalIntent.commandId} is pending`,
 			);
 		}
 		return state;
