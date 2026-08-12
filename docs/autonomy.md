@@ -39,7 +39,7 @@ Every run always has two core gates and conditionally freezes the active project
 
 Configured EvalFly and SpecSafe adapters refresh at `agent_end` before completion is evaluated. Malformed configured state rejects `/autonomy start`; unavailable, stale, or mismatched evidence fails closed.
 
-Every required gate must pass for the same attempt and artifact revision. Gate reporters are fixed by type (`native-goal-event`, `host-verifier`, `evalfly-adapter`, or `specsafe-adapter`); model-supplied evidence cannot substitute for them. Every potentially mutating tool result advances the artifact revision and resets all gates, whether that tool reports success or failure. Only known read-only tools (`read`, `grep`, and `glob`) plus the `goal` control tool and `autonomy_gate` are exempt. Unknown tools are treated as mutating, so verification must run after the last mutation. A failed or missing gate causes another bounded attempt; exhausting `maxAttempts` records a terminal failure with evidence.
+Every required gate must pass for the same attempt and artifact revision. Gate reporters are fixed by type (`native-goal-event`, `host-verifier`, `evalfly-adapter`, or `specsafe-adapter`); model-supplied evidence cannot substitute for them. Gate writes merge under the state lock, so concurrent evidence for different gates is preserved. Every potentially mutating tool result advances the artifact revision and resets all gates, whether that tool reports success or failure. The fixed host verification command is fingerprinted against Git-tracked, staged, and untracked artifact bytes before and after execution; a command that mutates artifacts advances the revision and invalidates earlier gates before its own receipt is recorded. Only known read-only tools (`read`, `grep`, and `glob`) plus the `goal` control tool and `autonomy_gate` are exempt from tool-result invalidation. Unknown tools are treated as mutating.
 
 Model prose is never completion evidence. `<promise>DONE</promise>`, similar markers, and an `agent_end` event cannot complete a run by themselves.
 
@@ -135,7 +135,7 @@ Python skills run under a manifest contract:
 - environment variables require both a manifest request and a host-owned allowlist;
 - content-addressed virtual environment cache in private per-user state with stale-owner lock recovery;
 - cache reuse requires a checksummed environment marker whose contract and current Python executable hash match; repository writes cannot alter cached dependency code, and symlinked, hard-linked, escaped, or non-regular cache control artifacts fail closed;
-- bounded provisioning subprocesses with a scrubbed environment;
+- bounded provisioning subprocesses with a scrubbed environment, extension-owned working directory, isolated Python startup, and bounded stdout/stderr collectors;
 - verification, runner, and provisioning subprocesses use dedicated process groups; cancellation, timeout, and output-limit failures terminate the whole process tree, and cancellation throws instead of recording a failed verification receipt;
 - `network: deny` fails closed unless a network sandbox adapter is available, and uncached dependencies are never installed for a network-denied skill;
 - duplicate skill IDs are rejected across a loaded manifest collection.
@@ -150,10 +150,12 @@ project-root entrypoint beside the manifest. The installed extension exposes
 /python-skill run {"id":"skill-id","input":{"key":"value"}}
 ```
 
-This is a human slash-command bridge, not a model-callable tool. Duplicate IDs
-across discovered manifests fail closed. Stock Pantheon has no OS network
-sandbox adapter, so a manifest declaring `network: deny` is rejected rather
-than run.
+This is a human slash-command bridge, not a model-callable tool. Every component
+from the canonical project root through `.omp/python-skills` must be a real
+directory, and the runner rechecks that the canonical skill root remains inside
+that project before execution. Duplicate IDs are rejected. Stock Pantheon has
+no network sandbox adapter, so a manifest declaring `network: deny` is rejected
+rather than run.
 
 ## Capability-gated OMP state
 

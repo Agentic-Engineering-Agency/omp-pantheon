@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { lstat, readlink } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type {
@@ -53,6 +54,7 @@ const TERMINAL_WORKER_STATES = new Set(["exited", "failed", "stopped"]);
 export interface VerificationReceipt {
 	status: "pass" | "fail";
 	evidence: string;
+	artifactHash?: string;
 }
 
 export interface VerificationRunner {
@@ -62,12 +64,112 @@ export interface VerificationRunner {
 		signal?: AbortSignal,
 	): Promise<VerificationReceipt>;
 }
+const MAXIMUM_UNTRACKED_PATH_BYTES = 8 * 1024 * 1024;
+
+async function updateHashFromStream(
+	hash: ReturnType<typeof createHash>,
+	stream: ReadableStream<Uint8Array>,
+): Promise<void> {
+	const reader = stream.getReader();
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) return;
+		hash.update(value);
+	}
+}
+
+async function gitOutput(
+	cwd: string,
+	args: string[],
+	maximumBytes?: number,
+): Promise<Uint8Array> {
+	const child = Bun.spawn({
+		cmd: ["git", ...args],
+		cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const reader = child.stdout.getReader();
+	const chunks: Uint8Array[] = [];
+	let length = 0;
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		length += value.byteLength;
+		if (maximumBytes !== undefined && length > maximumBytes) {
+			child.kill("SIGKILL");
+			await child.exited;
+			throw new Error("Git artifact path list exceeds its safety bound");
+		}
+		chunks.push(value);
+	}
+	const exitCode = await child.exited;
+	if (exitCode !== 0) {
+		throw new Error(
+			`Cannot fingerprint autonomy artifacts: git ${args[0] ?? ""} failed`,
+		);
+	}
+	const output = new Uint8Array(length);
+	let offset = 0;
+	for (const chunk of chunks) {
+		output.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return output;
+}
+
+async function fingerprintGitArtifacts(cwd: string): Promise<string> {
+	const hash = createHash("sha256");
+	for (const args of [
+		["diff", "--binary", "--no-ext-diff", "--"],
+		["diff", "--binary", "--no-ext-diff", "--cached", "--"],
+	]) {
+		const diff = Bun.spawn({
+			cmd: ["git", ...args],
+			cwd,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		await updateHashFromStream(hash, diff.stdout);
+		if ((await diff.exited) !== 0) {
+			throw new Error(
+				`Cannot fingerprint autonomy artifacts: git ${args.join(" ")} failed`,
+			);
+		}
+	}
+	const untrackedOutput = await gitOutput(
+		cwd,
+		["ls-files", "--others", "--exclude-standard", "-z"],
+		MAXIMUM_UNTRACKED_PATH_BYTES,
+	);
+	const untrackedPaths = new TextDecoder()
+		.decode(untrackedOutput)
+		.split("\0")
+		.filter(Boolean);
+	for (const path of untrackedPaths) {
+		const absolutePath = resolve(cwd, path);
+		const metadata = await lstat(absolutePath);
+		hash.update("\0untracked\0");
+		hash.update(path);
+		if (metadata.isSymbolicLink()) {
+			hash.update("\0symlink\0");
+			hash.update(await readlink(absolutePath));
+		} else if (metadata.isFile()) {
+			hash.update("\0file\0");
+			await updateHashFromStream(hash, Bun.file(absolutePath).stream());
+		} else {
+			hash.update(`\0other:${metadata.mode}\0`);
+		}
+	}
+	return hash.digest("hex");
+}
 
 const defaultVerificationRunner: VerificationRunner = {
 	async verify(cwd, command, signal) {
 		if (signal?.aborted) {
 			throw new DOMException("Autonomy verification aborted", "AbortError");
 		}
+		const beforeArtifacts = await fingerprintGitArtifacts(cwd);
 		const child = Bun.spawn({
 			cmd: [process.env.SHELL ?? "/bin/sh", "-lc", command],
 			cwd,
@@ -93,13 +195,16 @@ const defaultVerificationRunner: VerificationRunner = {
 				if (terminationPromise !== null) await terminationPromise;
 				throw new DOMException("Autonomy verification aborted", "AbortError");
 			}
+			const afterArtifacts = await fingerprintGitArtifacts(cwd);
 			return {
 				status: exitCode === 0 ? "pass" : "fail",
 				evidence: `command:${command}:exit:${exitCode}`,
+				artifactHash:
+					beforeArtifacts === afterArtifacts ? undefined : afterArtifacts,
 			};
 		} catch (error) {
 			if (aborted || signal?.aborted) {
-				await terminate();
+				if (terminationPromise !== null) await terminationPromise;
 				throw new DOMException("Autonomy verification aborted", "AbortError");
 			}
 			throw error;
@@ -345,14 +450,21 @@ export class AutonomyRuntime {
 			state.verificationCommand,
 			signal,
 		);
+		const evidenceState =
+			receipt.artifactHash === undefined
+				? state
+				: await controller.recordArtifactRevision(
+						`verification:${receipt.artifactHash}`,
+						state.id,
+					);
 		return controller.recordGate(
 			{
 				gateId: "verification",
 				status: receipt.status,
 				evidence: receipt.evidence,
 				reporter: "host-verifier",
-				attempt: state.attempt,
-				artifactRevision: state.artifactRevision,
+				attempt: evidenceState.attempt,
+				artifactRevision: evidenceState.artifactRevision,
 			},
 			state.id,
 		);

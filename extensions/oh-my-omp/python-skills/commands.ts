@@ -37,28 +37,43 @@ async function readManifest(path: string): Promise<unknown> {
 		await handle.close();
 	}
 }
+async function assertOwnedDirectoryChain(
+	root: string,
+	target: string,
+): Promise<boolean> {
+	const targetRelative = relative(root, target);
+	if (targetRelative === ".." || targetRelative.startsWith(`..${sep}`)) {
+		throw new Error("Python skill directory escapes the project");
+	}
+	let current = root;
+	for (const component of targetRelative.split(sep).filter(Boolean)) {
+		current = join(current, component);
+		let metadata: Stats;
+		try {
+			metadata = await lstat(current);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+			throw error;
+		}
+		if (metadata.isSymbolicLink()) {
+			throw new Error(
+				`Python skill directory contains a symbolic link: ${current}`,
+			);
+		}
+		if (!metadata.isDirectory()) {
+			throw new Error(`Python skill path is not a directory: ${current}`);
+		}
+	}
+	return true;
+}
 
 async function discoverPythonSkills(
 	projectRoot: string,
 ): Promise<InstalledPythonSkill[]> {
 	const canonicalProject = await realpath(projectRoot);
 	const skillsRoot = resolve(canonicalProject, SKILL_DIRECTORY);
-	const skillsRelative = relative(canonicalProject, skillsRoot);
-	if (skillsRelative === ".." || skillsRelative.startsWith(`..${sep}`)) {
-		throw new Error("Python skill directory escapes the project");
-	}
-	let rootMetadata: Stats;
-	try {
-		rootMetadata = await lstat(skillsRoot);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-		throw error;
-	}
-	if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
-		throw new Error(
-			"Python skill directory must be a non-symbolic-link directory",
-		);
-	}
+	if (!(await assertOwnedDirectoryChain(canonicalProject, skillsRoot)))
+		return [];
 	const skills: InstalledPythonSkill[] = [];
 	for (const entry of await readdir(skillsRoot, { withFileTypes: true })) {
 		if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
@@ -136,6 +151,7 @@ export function registerPythonSkillCommand(pi: ExtensionAPI): void {
 				}
 				const runner = new PythonSkillRunner(
 					new PythonSkillEnvironment(ctx.cwd),
+					{ projectRoot: ctx.cwd },
 				);
 				const result = await runner.run(
 					skill.root,

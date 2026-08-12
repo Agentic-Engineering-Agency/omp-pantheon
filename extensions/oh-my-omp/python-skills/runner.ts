@@ -34,6 +34,7 @@ export interface PythonSkillRunnerOptions {
 	environment?: Record<string, string | undefined>;
 	allowedEnvironment?: readonly string[];
 	networkSandbox?: PythonNetworkSandbox;
+	projectRoot?: string;
 }
 
 export interface PythonSkillRunResult {
@@ -339,6 +340,7 @@ export class PythonSkillRunner {
 	private readonly sourceEnvironment: Record<string, string | undefined>;
 	private readonly networkSandbox?: PythonNetworkSandbox;
 	private readonly allowedEnvironment: ReadonlySet<string>;
+	private readonly projectRoot?: string;
 
 	constructor(
 		private readonly environmentProvider: PythonEnvironmentProvider,
@@ -347,6 +349,7 @@ export class PythonSkillRunner {
 		this.sourceEnvironment = options.environment ?? process.env;
 		this.allowedEnvironment = new Set(options.allowedEnvironment ?? []);
 		this.networkSandbox = options.networkSandbox;
+		this.projectRoot = options.projectRoot;
 	}
 
 	async run(
@@ -379,6 +382,14 @@ export class PythonSkillRunner {
 			skillRoot,
 			manifest.entrypoint,
 		);
+		if (this.projectRoot !== undefined) {
+			const realProjectRoot = await realpath(this.projectRoot);
+			assertContained(
+				realProjectRoot,
+				safePaths.skillRoot,
+				"Python skill root escapes the host-authorized project",
+			);
+		}
 		const provisioned = await this.environmentProvider.provision(manifest);
 		const staged = await stageEntrypoint(safePaths);
 		try {

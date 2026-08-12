@@ -161,6 +161,24 @@ describe("Python skill environment", () => {
 		expect(await Bun.file(provisioned.pythonPath).exists()).toBe(true);
 	}, 20_000);
 
+	test("does not execute repository sitecustomize during provisioning", async () => {
+		if (!pythonPath) throw new Error("python3 is required for this test");
+		const root = await createRoot();
+		const marker = join(root, "provisioning-sitecustomize-ran");
+		await writeFile(
+			join(root, "sitecustomize.py"),
+			`from pathlib import Path\nPath(${JSON.stringify(marker)}).write_text("executed")\n`,
+		);
+		const environment = new PythonSkillEnvironment(root, {
+			pythonPath,
+			stateHome: pythonStateHome(root),
+		});
+
+		await environment.provision(validManifest());
+
+		expect(await Bun.file(marker).exists()).toBe(false);
+	}, 20_000);
+
 	test("refuses a symlinked private environment cache", async () => {
 		const root = await createRoot();
 		const outside = await createRoot();
@@ -260,6 +278,46 @@ describe("Python skill environment", () => {
 		}
 		expect(childAlive).toBe(false);
 	});
+
+	test("bounds provisioning output and kills the process tree on overflow", async () => {
+		if (process.platform === "win32") return;
+		const root = await createRoot();
+		const pidPath = join(root, "overflow-child.pid");
+		const fakePython = join(root, "noisy-python");
+		await writeFile(
+			fakePython,
+			[
+				"#!/bin/sh",
+				"sleep 60 &",
+				"child=$!",
+				`printf '%s' "$child" > ${JSON.stringify(pidPath)}`,
+				"while :; do printf '0123456789abcdef'; done",
+			].join("\n"),
+		);
+		await chmod(fakePython, 0o755);
+		const environment = new PythonSkillEnvironment(root, {
+			pythonPath: fakePython,
+			provisioningMaxOutputBytes: 1_024,
+			provisioningTimeoutMs: 10_000,
+			stateHome: pythonStateHome(root),
+		});
+
+		await expect(environment.provision(validManifest())).rejects.toThrow(
+			"exceeded maximum",
+		);
+		const childPid = Number(await readFile(pidPath, "utf8"));
+		let childAlive = true;
+		for (let attempt = 0; attempt < 20 && childAlive; attempt += 1) {
+			try {
+				process.kill(childPid, 0);
+				await Bun.sleep(10);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				childAlive = false;
+			}
+		}
+		expect(childAlive).toBe(false);
+	}, 15_000);
 });
 
 describe("Python skill runner", () => {

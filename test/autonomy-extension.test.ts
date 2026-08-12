@@ -385,6 +385,47 @@ describe("autonomy extension", () => {
 		expect(notifications.at(-1)).toBe('info:{"message":"installed"}');
 	}, 20_000);
 
+	test("entrypoint rejects symlinked Python skill directory ancestors", async () => {
+		for (const symlinkAncestor of [".omp", join(".omp", "python-skills")]) {
+			const cwd = await mkdtemp(join(tmpdir(), "pantheon-prime-python-link-"));
+			const outside = await mkdtemp(
+				join(tmpdir(), "pantheon-prime-python-outside-"),
+			);
+			roots.push(cwd, outside);
+			const outsideSkills =
+				symlinkAncestor === ".omp" ? join(outside, "python-skills") : outside;
+			const skillRoot = join(outsideSkills, "escape");
+			await mkdir(skillRoot, { recursive: true });
+			await writeFile(
+				join(skillRoot, "manifest.json"),
+				JSON.stringify({
+					id: "escape",
+					python: ">=3.11,<3.15",
+					dependencies: [],
+					entrypoint: "main.py",
+					timeoutMs: 1_000,
+					environment: [],
+					network: "inherit",
+					maxOutputBytes: 4096,
+					input: { type: "object", required: [] },
+					output: { type: "object", required: [] },
+				}),
+			);
+			await writeFile(join(skillRoot, "main.py"), "raise SystemExit(99)\n");
+			const linkPath = join(cwd, symlinkAncestor);
+			await mkdir(dirname(linkPath), { recursive: true });
+			await symlink(outside, linkPath, "dir");
+			const { commands, ctx, notifications } = await createFakeExtension(
+				registerPantheon,
+				{ cwd },
+			);
+
+			await commands["python-skill"]?.handler("list", ctx);
+
+			expect(notifications.at(-1)).toContain("symbolic link");
+		}
+	});
+
 	test("starts opt-in state and reports status", async () => {
 		const { commands, ctx, messages, notifications } =
 			await createFakeExtension();
@@ -1104,11 +1145,82 @@ describe("autonomy extension", () => {
 			status: "pass",
 			evidence: "command:stale:exit:0",
 		});
-		await expect(verification).rejects.toThrow("autonomy run changed");
+		await expect(verification).rejects.toThrow("run changed");
 		expect(
 			(await store.load())?.gates.find((gate) => gate.id === "verification")
 				?.status,
 		).toBe("pending");
+	});
+
+	test("invalidates gate evidence when verification mutates artifacts", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-verify-write-"),
+		);
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-verify-write-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const sessionFile = join(cwd, "session.jsonl");
+		const artifact = join(cwd, "artifact.txt");
+		await writeFile(artifact, "before\n");
+		for (const args of [
+			["init", "-b", "main"],
+			["config", "user.email", "test@example.com"],
+			["config", "user.name", "Test"],
+			["config", "commit.gpgsign", "false"],
+			["add", "artifact.txt"],
+			["commit", "-m", "fixture"],
+		]) {
+			const initialize = Bun.spawn({
+				cmd: ["git", ...args],
+				cwd,
+				stdout: "ignore",
+				stderr: "ignore",
+			});
+			expect(await initialize.exited).toBe(0);
+		}
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(pi, undefined, {
+					stateHome,
+					agentdFactory: () => ({
+						async start() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async status() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async stop() {
+							return { state: "stopped", restartCount: 0 };
+						},
+						close() {},
+					}),
+				}),
+			{ cwd, sessionFile },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Verify mutations" --max-attempts=2 --verify="printf after > artifact.txt"',
+			extension.ctx,
+		);
+
+		await extension.tools.autonomy_gate?.execute(
+			"mutating-verification",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+
+		const state = await new AutonomyStore(cwd, {
+			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+		}).load();
+		expect(state?.artifactRevision).toBe(1);
+		expect(state?.gates.find((gate) => gate.id === "native-goal")?.status).toBe(
+			"pending",
+		);
+		expect(
+			state?.gates.find((gate) => gate.id === "verification"),
+		).toMatchObject({ status: "pass", artifactRevision: 1 });
 	});
 
 	test("aborted verification before launch records no receipt", async () => {
@@ -1176,6 +1288,13 @@ describe("autonomy extension", () => {
 			join(tmpdir(), "pantheon-autonomy-abort-tree-state-"),
 		);
 		roots.push(cwd, stateHome);
+		const initialize = Bun.spawn({
+			cmd: ["git", "init", "-b", "main"],
+			cwd,
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		expect(await initialize.exited).toBe(0);
 		const parentPidPath = join(cwd, "parent.pid");
 		const childPidPath = join(cwd, "child.pid");
 		let runtime: AutonomyRuntime | undefined;

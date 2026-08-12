@@ -560,6 +560,59 @@ describe("OMP session and broker adapters", () => {
 		]);
 	});
 
+	test("releases completed sessions and does not dispose them again on close", async () => {
+		const disposals: string[] = [];
+		let nextSession = 0;
+		const executor = new OmpSessionExecutor({
+			openSessionManager: async (sessionFile) => ({ sessionFile }),
+			createSession: async ({ sessionManager }) => {
+				nextSession += 1;
+				const sessionId = `session-${nextSession}`;
+				return {
+					sessionId,
+					sessionFile: sessionManager.sessionFile,
+					async prompt() {},
+					async waitForIdle() {},
+					async flush() {},
+					async dispose() {
+						disposals.push(sessionId);
+					},
+				};
+			},
+		});
+
+		await executor.execute(command("command-1"), new AbortController().signal);
+		await executor.execute(command("command-2"), new AbortController().signal);
+		await executor.close();
+
+		expect(disposals).toEqual(["session-1", "session-2"]);
+	});
+
+	test("releases sessions even when disposal fails", async () => {
+		let disposals = 0;
+		const executor = new OmpSessionExecutor({
+			openSessionManager: async (sessionFile) => ({ sessionFile }),
+			createSession: async ({ sessionManager }) => ({
+				sessionId: "session-failure",
+				sessionFile: sessionManager.sessionFile,
+				async prompt() {},
+				async waitForIdle() {},
+				async flush() {},
+				async dispose() {
+					disposals += 1;
+					throw new Error("dispose failed");
+				},
+			}),
+		});
+
+		await expect(
+			executor.execute(command(), new AbortController().signal),
+		).rejects.toBeInstanceOf(CommandPersistenceUncertainError);
+		await executor.close();
+
+		expect(disposals).toBe(1);
+	});
+
 	test("fences post-prompt persistence failures without replay", async () => {
 		const { journal } = await createJournal();
 		await journal.enqueue(command());

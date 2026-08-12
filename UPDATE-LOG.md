@@ -65,6 +65,11 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
 - Added human-only `/refinement` and `/python-skill` integration surfaces for
   approval-gated refinement and isolated Python skills. Rollback bytes stay in
   private per-user state; project state contains only checksummed history.
+- Hardened final Prime host boundaries: concurrent gate receipts merge under
+  lock; verification-command mutations invalidate older evidence; completed
+  headless sessions are released; Python skill ancestors cannot be symlinked;
+  and provisioning uses isolated startup with bounded output and process-tree
+  termination.
 - Added capability adapters for JSON-only kernel checkpoints and retained
   subagents. Both report unsupported on stock OMP 17.2.14 because the required
   public APIs do not exist yet.

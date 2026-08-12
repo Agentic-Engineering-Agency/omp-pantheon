@@ -555,6 +555,50 @@ describe("AutonomyStore", () => {
 		expect(revised.gates.every((gate) => gate.status === "pending")).toBe(true);
 		expect((await store.load())?.revision).toBe(revised.revision);
 	});
+	test("atomically merges concurrent evidence for distinct gates", async () => {
+		const { controller, root, store } = await createHarness();
+		const started = await startRun(controller);
+		await controller.bindNativeGoal({
+			id: "goal-1",
+			objective: started.task,
+		});
+		const peer = new AutonomyController(new AutonomyStore(root));
+		const current = await controller.get();
+		if (current === null) throw new Error("run missing");
+
+		await Promise.all([
+			controller.recordGate({
+				gateId: "native-goal",
+				status: "pass",
+				evidence: "goal:goal-1:complete",
+				reporter: "native-goal-event",
+				attempt: current.attempt,
+				artifactRevision: current.artifactRevision,
+			}),
+			peer.recordGate({
+				gateId: "verification",
+				status: "pass",
+				evidence: "command:bun test:exit:0",
+				reporter: "host-verifier",
+				attempt: current.attempt,
+				artifactRevision: current.artifactRevision,
+			}),
+		]);
+
+		const merged = await store.load();
+		expect(merged?.gates).toEqual([
+			expect.objectContaining({
+				id: "native-goal",
+				status: "pass",
+				evidence: "goal:goal-1:complete",
+			}),
+			expect.objectContaining({
+				id: "verification",
+				status: "pass",
+				evidence: "command:bun test:exit:0",
+			}),
+		]);
+	});
 	test("refuses a symlinked project autonomy state directory", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pantheon-autonomy-symlink-"));
 		const outside = await mkdtemp(join(tmpdir(), "pantheon-autonomy-outside-"));

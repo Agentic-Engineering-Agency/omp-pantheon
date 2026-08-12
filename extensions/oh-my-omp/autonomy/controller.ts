@@ -221,73 +221,78 @@ export class AutonomyController {
 		args: RecordAutonomyGateArgs,
 		expectedRunId?: string,
 	): Promise<AutonomyRun> {
-		const state = await this.requireMutable(
-			"record gate evidence",
-			false,
-			expectedRunId,
-		);
-		if (state.status === "paused") {
-			throw new AutonomyTransitionError(
-				"Cannot record gate evidence while autonomy is paused",
-			);
-		}
-		if (args.attempt !== state.attempt) {
-			throw new AutonomyTransitionError(
-				`Gate evidence targets attempt ${args.attempt}, current attempt is ${state.attempt}`,
-			);
-		}
-		if (args.artifactRevision !== state.artifactRevision) {
-			throw new AutonomyTransitionError(
-				`Gate evidence targets artifact revision ${args.artifactRevision}, current artifact revision is ${state.artifactRevision}`,
-			);
-		}
-		if (args.evidence.trim().length === 0) {
+		const evidence = args.evidence.trim();
+		if (evidence.length === 0) {
 			throw new AutonomyTransitionError("Gate evidence must not be empty");
 		}
-		const gateIndex = state.gates.findIndex((gate) => gate.id === args.gateId);
-		if (gateIndex === -1) {
-			throw new AutonomyTransitionError(
-				`Unknown autonomy gate: ${args.gateId}`,
+		const expectedId = expectedRunId ?? (await this.requireState()).id;
+		return this.store.update(expectedId, (state) => {
+			this.assertMutableState(state, "record gate evidence", false, expectedId);
+			if (state.status === "paused") {
+				throw new AutonomyTransitionError(
+					"Cannot record gate evidence while autonomy is paused",
+				);
+			}
+			if (args.attempt !== state.attempt) {
+				throw new AutonomyTransitionError(
+					`Gate evidence targets attempt ${args.attempt}, current attempt is ${state.attempt}`,
+				);
+			}
+			if (args.artifactRevision !== state.artifactRevision) {
+				throw new AutonomyTransitionError(
+					`Gate evidence targets artifact revision ${args.artifactRevision}, current artifact revision is ${state.artifactRevision}`,
+				);
+			}
+			const gateIndex = state.gates.findIndex(
+				(gate) => gate.id === args.gateId,
 			);
-		}
-		const requirement = state.gates[gateIndex]?.requirement;
-		const expectedReporter =
-			requirement?.kind === "native-goal"
-				? "native-goal-event"
-				: requirement?.kind === "evalfly"
-					? "evalfly-adapter"
-					: requirement?.kind === "specsafe"
-						? "specsafe-adapter"
-						: "host-verifier";
-		if (args.reporter !== expectedReporter) {
-			throw new AutonomyTransitionError(
-				`Autonomy gate ${args.gateId} requires reporter ${expectedReporter}`,
-			);
-		}
-		if (args.gateId === "native-goal" && state.nativeGoalId === undefined) {
-			throw new AutonomyTransitionError(
-				"Autonomy native goal gate is not bound to this run",
-			);
-		}
+			if (gateIndex === -1) {
+				throw new AutonomyTransitionError(
+					`Unknown autonomy gate: ${args.gateId}`,
+				);
+			}
+			const requirement = state.gates[gateIndex]?.requirement;
+			const expectedReporter =
+				requirement?.kind === "native-goal"
+					? "native-goal-event"
+					: requirement?.kind === "evalfly"
+						? "evalfly-adapter"
+						: requirement?.kind === "specsafe"
+							? "specsafe-adapter"
+							: "host-verifier";
+			if (args.reporter !== expectedReporter) {
+				throw new AutonomyTransitionError(
+					`Autonomy gate ${args.gateId} requires reporter ${expectedReporter}`,
+				);
+			}
+			if (args.gateId === "native-goal" && state.nativeGoalId === undefined) {
+				throw new AutonomyTransitionError(
+					"Autonomy native goal gate is not bound to this run",
+				);
+			}
 
-		const timestamp = this.now();
-		const gates = state.gates.map((gate, index): AutonomyGateRecord => {
-			if (index !== gateIndex) return gate;
+			const timestamp = this.now();
+			const gates = state.gates.map(
+				(gate, index): AutonomyGateRecord =>
+					index !== gateIndex
+						? gate
+						: {
+								...gate,
+								status: args.status,
+								evidence,
+								reporter: args.reporter,
+								attempt: args.attempt,
+								artifactRevision: args.artifactRevision,
+								updatedAt: timestamp,
+							},
+			);
 			return {
-				...gate,
-				status: args.status,
-				evidence: args.evidence.trim(),
-				reporter: args.reporter,
-				attempt: args.attempt,
-				artifactRevision: args.artifactRevision,
+				...state,
+				status: "running",
+				revision: state.revision + 1,
+				gates,
 				updatedAt: timestamp,
 			};
-		});
-		return this.persist({
-			...state,
-			status: "running",
-			gates,
-			updatedAt: timestamp,
 		});
 	}
 

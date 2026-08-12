@@ -46,10 +46,36 @@ export interface PythonSkillEnvironmentOptions {
 	lockTimeoutMs?: number;
 	staleLockMs?: number;
 	provisioningTimeoutMs?: number;
+	provisioningMaxOutputBytes?: number;
 	stateHome?: string;
 }
 
 const ENVIRONMENT_MARKER = ".pantheon-environment.json";
+const DEFAULT_PROVISIONING_MAX_OUTPUT_BYTES = 1024 * 1024;
+
+async function collectBounded(
+	stream: ReadableStream<Uint8Array>,
+	maximumBytes: number,
+	label: string,
+): Promise<string> {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let output = "";
+	let length = 0;
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		length += value.byteLength;
+		if (length > maximumBytes) {
+			await reader.cancel();
+			throw new PythonSkillEnvironmentError(
+				`Python provisioning exceeded maximum ${label} of ${maximumBytes} bytes`,
+			);
+		}
+		output += decoder.decode(value, { stream: true });
+	}
+	return output + decoder.decode();
+}
 
 interface EnvironmentMarkerPayload {
 	schemaVersion: 1;
@@ -75,6 +101,7 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 	private readonly staleLockMs: number;
 	private readonly stateHome?: string;
 	private readonly provisioningTimeoutMs: number;
+	private readonly provisioningMaxOutputBytes: number;
 
 	constructor(
 		private readonly projectRoot: string,
@@ -91,6 +118,17 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 		this.lockTimeoutMs = options.lockTimeoutMs ?? 30_000;
 		this.staleLockMs = options.staleLockMs ?? 5 * 60_000;
 		this.provisioningTimeoutMs = options.provisioningTimeoutMs ?? 120_000;
+		this.provisioningMaxOutputBytes =
+			options.provisioningMaxOutputBytes ??
+			DEFAULT_PROVISIONING_MAX_OUTPUT_BYTES;
+		if (
+			!Number.isInteger(this.provisioningMaxOutputBytes) ||
+			this.provisioningMaxOutputBytes < 1
+		) {
+			throw new PythonSkillEnvironmentError(
+				"Python provisioning output bound must be a positive integer",
+			);
+		}
 	}
 
 	async provision(
@@ -160,7 +198,7 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 			}
 			await this.assertPythonVersion(manifest.python);
 			await this.run(
-				[this.pythonPath, "-m", "venv", "--copies", temporaryPath],
+				[this.pythonPath, "-I", "-m", "venv", "--copies", temporaryPath],
 				"create virtualenv",
 			);
 			const temporaryPython = join(
@@ -171,6 +209,7 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 				await this.run(
 					[
 						temporaryPython,
+						"-I",
 						"-m",
 						"pip",
 						"install",
@@ -319,6 +358,7 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 		const { stdout: output } = await this.spawn(
 			[
 				this.pythonPath,
+				"-I",
 				"-c",
 				"import sys; print('.'.join(map(str, sys.version_info[:3])))",
 			],
@@ -365,6 +405,7 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 		}
 		const processHandle = Bun.spawn({
 			cmd: command,
+			cwd: this.areaRoot,
 			env: environment,
 			stdout: "pipe",
 			stderr: "pipe",
@@ -387,8 +428,16 @@ export class PythonSkillEnvironment implements PythonEnvironmentProvider {
 			try {
 				[exitCode, stdout, stderr] = await Promise.all([
 					processHandle.exited,
-					new Response(processHandle.stdout).text(),
-					new Response(processHandle.stderr).text(),
+					collectBounded(
+						processHandle.stdout,
+						this.provisioningMaxOutputBytes,
+						"output",
+					),
+					collectBounded(
+						processHandle.stderr,
+						this.provisioningMaxOutputBytes,
+						"diagnostics",
+					),
 				]);
 			} catch (error) {
 				await terminate();

@@ -129,8 +129,7 @@ export class OmpSessionExecutor implements CommandExecutor {
 		} finally {
 			signal.removeEventListener("abort", abort);
 			try {
-				await abortDisposal;
-				await session.dispose();
+				await (abortDisposal ?? session.dispose());
 			} catch (error) {
 				failure ??= promptDispatched
 					? new CommandPersistenceUncertainError(
@@ -138,6 +137,8 @@ export class OmpSessionExecutor implements CommandExecutor {
 							{ cause: error },
 						)
 					: error;
+			} finally {
+				this.#activeSessions.delete(session);
 			}
 		}
 		if (failure !== undefined) throw failure;
