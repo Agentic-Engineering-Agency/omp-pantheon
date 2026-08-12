@@ -32,19 +32,21 @@ async function createLedger(options?: {
 	afterCandidateInstall?: () => Promise<void> | void;
 }) {
 	const root = await mkdtemp(join(tmpdir(), "pantheon-refinement-"));
-	roots.push(root);
+	const stateHome = await mkdtemp(join(tmpdir(), "pantheon-refinement-state-"));
+	roots.push(root, stateHome);
 	await mkdir(join(root, "skills", "review"), { recursive: true });
 	await writeFile(join(root, "skills", "review", "SKILL.md"), BASE_CONTENT);
 	let sequence = 0;
 	const ledgerOptions = {
 		now: () => `2026-08-11T12:00:0${sequence++}.000Z`,
 		createId: () => `proposal-${sequence}`,
+		stateHome,
 		...(options?.afterCandidateInstall
 			? { afterCandidateInstall: options.afterCandidateInstall }
 			: {}),
 	};
 	const ledger = new RefinementLedger(root, ledgerOptions);
-	return { ledger, root };
+	return { ledger, root, stateHome };
 }
 
 async function propose(
@@ -91,6 +93,28 @@ describe("RefinementLedger", () => {
 		expect(
 			await readFile(join(root, "skills", "review", "SKILL.md"), "utf8"),
 		).toBe(CANDIDATE_CONTENT);
+	});
+
+	test("keeps rollback bytes in private state outside the repository", async () => {
+		const { ledger, root, stateHome } = await createLedger();
+		const proposal = await propose(ledger);
+		await ledger.validate(proposal.id, "evalfly:report-42");
+		await ledger.approve(proposal.id, "user:sebastian");
+		await ledger.activate(proposal.id, CANDIDATE_BYTES);
+
+		expect(
+			await Bun.file(
+				join(root, ".pi", "refinement", "snapshots", `${proposal.id}.json`),
+			).exists(),
+		).toBe(false);
+		const snapshotFiles = Array.from(
+			new Bun.Glob("omp-pantheon/refinement/*/snapshots/*.json").scanSync({
+				cwd: stateHome,
+				absolute: true,
+			}),
+		);
+		expect(snapshotFiles).toHaveLength(1);
+		expect(snapshotFiles[0]?.startsWith(root)).toBe(false);
 	});
 
 	test("does not let validation approve or activation use stale content", async () => {
@@ -166,7 +190,7 @@ describe("RefinementLedger", () => {
 
 	test("recovers activation interrupted after install without losing rollback snapshot", async () => {
 		const interrupt = new Error("interrupt after candidate install");
-		const { ledger, root } = await createLedger({
+		const { ledger, root, stateHome } = await createLedger({
 			afterCandidateInstall: () => {
 				throw interrupt;
 			},
@@ -185,6 +209,7 @@ describe("RefinementLedger", () => {
 
 		const recoveredLedger = new RefinementLedger(root, {
 			now: () => "2026-08-11T12:00:09.000Z",
+			stateHome,
 		});
 		const active = await recoveredLedger.activate(proposal.id, CANDIDATE_BYTES);
 		expect(active.status).toBe("active");

@@ -295,25 +295,31 @@ export class AutonomyController {
 		artifactHash: string,
 		expectedRunId?: string,
 	): Promise<AutonomyRun> {
-		const state = await this.requireMutable(
-			"record an artifact revision",
-			false,
-			expectedRunId,
-		);
-		if (artifactHash.trim().length === 0) {
+		const normalizedHash = artifactHash.trim();
+		if (normalizedHash.length === 0) {
 			throw new AutonomyTransitionError("Artifact hash must not be empty");
 		}
-		const timestamp = this.now();
-		const artifactRevision = state.artifactRevision + 1;
-		return this.persist({
-			...state,
-			status: state.status === "paused" ? "paused" : "running",
-			artifactRevision,
-			artifactHash: artifactHash.trim(),
-			gates: state.gates.map((gate) =>
-				resetGate(gate, state.attempt, artifactRevision),
-			),
-			updatedAt: timestamp,
+		const expectedId = expectedRunId ?? (await this.requireState()).id;
+		return this.store.update(expectedId, (state) => {
+			this.assertMutableState(
+				state,
+				"record an artifact revision",
+				false,
+				expectedId,
+			);
+			const timestamp = this.now();
+			const artifactRevision = state.artifactRevision + 1;
+			return {
+				...state,
+				status: state.status === "paused" ? "paused" : "running",
+				revision: state.revision + 1,
+				artifactRevision,
+				artifactHash: normalizedHash,
+				gates: state.gates.map((gate) =>
+					resetGate(gate, state.attempt, artifactRevision),
+				),
+				updatedAt: timestamp,
+			};
 		});
 	}
 
@@ -587,6 +593,16 @@ export class AutonomyController {
 		expectedRunId?: string,
 	): Promise<AutonomyRun> {
 		const state = await this.requireState();
+		this.assertMutableState(state, action, allowTerminalIntent, expectedRunId);
+		return state;
+	}
+
+	private assertMutableState(
+		state: AutonomyRun,
+		action: string,
+		allowTerminalIntent: boolean,
+		expectedRunId?: string,
+	): void {
 		if (expectedRunId !== undefined && state.id !== expectedRunId) {
 			throw new AutonomyTransitionError(
 				`Cannot ${action}: autonomy run changed from ${expectedRunId} to ${state.id}`,
@@ -602,7 +618,6 @@ export class AutonomyController {
 				`Cannot ${action}: terminal transition for command ${state.terminalIntent.commandId} is pending`,
 			);
 		}
-		return state;
 	}
 	private async persist(state: AutonomyRun): Promise<AutonomyRun> {
 		const next = { ...state, revision: state.revision + 1 };

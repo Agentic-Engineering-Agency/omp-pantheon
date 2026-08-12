@@ -526,6 +526,35 @@ describe("AutonomyStore", () => {
 		).toHaveLength(1);
 		expect((await store.load())?.revision).toBe(2);
 	});
+
+	test("atomically preserves artifact invalidation after a concurrent gate write", async () => {
+		const { controller, root, store } = await createHarness();
+		const started = await startRun(controller);
+		await controller.bindNativeGoal({
+			id: "goal-1",
+			objective: started.task,
+		});
+		const staleController = new AutonomyController(new AutonomyStore(root));
+		const beforeGate = await controller.get();
+		if (beforeGate === null) throw new Error("run missing");
+		await controller.recordGate({
+			gateId: "native-goal",
+			status: "pass",
+			evidence: "goal:goal-1:complete",
+			reporter: "native-goal-event",
+			attempt: beforeGate.attempt,
+			artifactRevision: beforeGate.artifactRevision,
+		});
+
+		const revised = await staleController.recordArtifactRevision(
+			"tool:write:sha256",
+			started.id,
+		);
+
+		expect(revised.artifactRevision).toBe(1);
+		expect(revised.gates.every((gate) => gate.status === "pending")).toBe(true);
+		expect((await store.load())?.revision).toBe(revised.revision);
+	});
 	test("refuses a symlinked project autonomy state directory", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pantheon-autonomy-symlink-"));
 		const outside = await mkdtemp(join(tmpdir(), "pantheon-autonomy-outside-"));

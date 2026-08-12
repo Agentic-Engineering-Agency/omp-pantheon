@@ -62,7 +62,9 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
   command outcome. Such commands are permanently fenced instead of released
   for retry, preventing duplicate tool side effects after idle, flush, disposal,
   heartbeat, receipt, or acknowledgement failures.
-- Added approval-gated refinement and isolated Python skill contracts.
+- Added human-only `/refinement` and `/python-skill` integration surfaces for
+  approval-gated refinement and isolated Python skills. Rollback bytes stay in
+  private per-user state; project state contains only checksummed history.
 - Added capability adapters for JSON-only kernel checkpoints and retained
   subagents. Both report unsupported on stock OMP 17.2.14 because the required
   public APIs do not exist yet.
@@ -72,10 +74,10 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
   orchestration prompts; they no longer own persistence or completion.
 
 Autonomy objective state, executable queues, crash-recoverable SpecSafe gate
-receipts, and Python caches live in private per-user XDG state. Refinement
-history remains project-local under `.pi/refinement/`. See
-[`docs/autonomy.md`](./docs/autonomy.md) for setup, migration, recovery, and
-policy details.
+receipts, refinement rollback snapshots, and Python caches live in private
+per-user XDG state. Refinement history remains project-local under
+`.pi/refinement/`. See [`docs/autonomy.md`](./docs/autonomy.md) for setup,
+migration, recovery, and policy details.
 
 ## Upstream source map (`packages/omo-opencode/src/`)
 

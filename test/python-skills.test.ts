@@ -321,6 +321,36 @@ describe("Python skill runner", () => {
 		await expect(access(output.stage)).rejects.toThrow();
 	});
 
+	test("rejects nested entrypoints instead of changing import and resource semantics", async () => {
+		expect(() => validManifest({ entrypoint: "src/main.py" })).toThrow(
+			"project-root",
+		);
+	});
+
+	test("does not execute repository sitecustomize before the staged entrypoint", async () => {
+		if (!pythonPath) throw new Error("python3 is required for this test");
+		const root = await createRoot();
+		const marker = join(root, "sitecustomize-ran");
+		await writeFile(
+			join(root, "sitecustomize.py"),
+			`import pathlib\npathlib.Path(${JSON.stringify(marker)}).write_text("ran")\n`,
+		);
+		await writeFile(
+			join(root, "main.py"),
+			'import json, sys\njson.dump({"message": "safe"}, sys.stdout)\n',
+		);
+		const runner = new PythonSkillRunner({
+			provision: async () => ({ pythonPath, reused: true }),
+		});
+
+		const result = await runner.run(root, validManifest(), {
+			message: "hello",
+		});
+
+		expect(result.output).toEqual({ message: "safe" });
+		await expect(access(marker)).rejects.toThrow();
+	});
+
 	test("rejects an entrypoint replaced during provisioning without executing replacement code", async () => {
 		if (!pythonPath) throw new Error("python3 is required for this test");
 		const root = await createRoot();

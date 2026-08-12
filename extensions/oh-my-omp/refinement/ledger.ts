@@ -7,6 +7,10 @@ import {
 	assertNoSymlinkComponents,
 	ensurePrivateDirectory,
 } from "../private-files";
+import {
+	preparePrivateProjectAreaRoot,
+	privateProjectAreaRoot,
+} from "../private-state";
 
 import type {
 	CreateRefinementProposal,
@@ -17,7 +21,7 @@ import type {
 
 const LEDGER_PATH = join(".pi", "refinement", "ledger.jsonl");
 const QUARANTINE_PATH = join(".pi", "refinement", "quarantine.jsonl");
-const SNAPSHOT_DIRECTORY = join(".pi", "refinement", "snapshots");
+const SNAPSHOT_DIRECTORY = "snapshots";
 const SAFE_ID = /^[A-Za-z0-9._-]+$/;
 
 interface RefinementSnapshot {
@@ -40,6 +44,7 @@ export class RefinementLedgerError extends Error {
 export interface RefinementLedgerOptions {
 	now?: () => string;
 	createId?: () => string;
+	stateHome?: string;
 	afterCandidateInstall?: (
 		proposal: RefinementProposal,
 	) => Promise<void> | void;
@@ -49,12 +54,13 @@ export class RefinementLedger {
 	private readonly ledgerPath: string;
 	private readonly lockPath: string;
 	private readonly quarantinePath: string;
+	private readonly snapshotRoot: string;
+	private readonly stateHome?: string;
 	private readonly now: () => string;
 	private readonly createId: () => string;
 	private readonly afterCandidateInstall?: (
 		proposal: RefinementProposal,
 	) => Promise<void> | void;
-
 	constructor(
 		private readonly root: string,
 		options: RefinementLedgerOptions = {},
@@ -62,6 +68,12 @@ export class RefinementLedger {
 		this.ledgerPath = join(root, LEDGER_PATH);
 		this.lockPath = `${this.ledgerPath}.lock`;
 		this.quarantinePath = join(root, QUARANTINE_PATH);
+		this.snapshotRoot = privateProjectAreaRoot(
+			root,
+			"refinement",
+			options.stateHome,
+		);
+		this.stateHome = options.stateHome;
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.createId = options.createId ?? randomUUID;
 		this.afterCandidateInstall = options.afterCandidateInstall;
@@ -344,7 +356,7 @@ export class RefinementLedger {
 				"Refinement proposal ID contains unsafe path characters",
 			);
 		}
-		return join(this.root, SNAPSHOT_DIRECTORY, `${proposal.id}.json`);
+		return join(this.snapshotRoot, SNAPSHOT_DIRECTORY, `${proposal.id}.json`);
 	}
 
 	private async writeSnapshot(
@@ -352,9 +364,14 @@ export class RefinementLedger {
 		content: Uint8Array,
 		mode: number,
 	): Promise<void> {
+		await preparePrivateProjectAreaRoot(
+			this.root,
+			"refinement",
+			this.stateHome,
+		);
 		const snapshotPath = this.snapshotPath(proposal);
 		const snapshotDirectory = dirname(snapshotPath);
-		await assertNoSymlinkComponents(this.root, snapshotPath);
+		await assertNoSymlinkComponents(this.snapshotRoot, snapshotPath);
 		await ensurePrivateDirectory(snapshotDirectory);
 		const snapshotWithoutChecksum = {
 			schemaVersion: 1 as const,
@@ -386,8 +403,13 @@ export class RefinementLedger {
 	private async readSnapshot(
 		proposal: RefinementProposal,
 	): Promise<RefinementSnapshot> {
+		await preparePrivateProjectAreaRoot(
+			this.root,
+			"refinement",
+			this.stateHome,
+		);
 		const snapshotPath = this.snapshotPath(proposal);
-		await assertNoSymlinkComponents(this.root, snapshotPath);
+		await assertNoSymlinkComponents(this.snapshotRoot, snapshotPath);
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(await readFile(snapshotPath, "utf8"));

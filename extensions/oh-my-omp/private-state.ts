@@ -9,7 +9,11 @@ import {
 	ensurePrivateDirectory,
 } from "./private-files";
 
-export type PrivateStateArea = "autonomy" | "python-skills" | "specsafe";
+export type PrivateStateArea =
+	| "autonomy"
+	| "python-skills"
+	| "refinement"
+	| "specsafe";
 
 export function resolvedPrivateStateHome(stateHome?: string): string {
 	return resolve(

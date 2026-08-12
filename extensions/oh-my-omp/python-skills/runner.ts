@@ -24,7 +24,10 @@ export class PythonSkillRunnerError extends Error {
 }
 
 export interface PythonNetworkSandbox {
-	buildCommand(pythonPath: string, entrypoint: string): string[];
+	buildCommand(
+		pythonPath: string,
+		pythonArguments: readonly string[],
+	): string[];
 }
 
 export interface PythonSkillRunnerOptions {
@@ -324,6 +327,14 @@ async function stageEntrypoint(
 	}
 }
 
+const ISOLATED_ENTRYPOINT_WRAPPER = [
+	"import runpy, sys",
+	"entrypoint, skill_root = sys.argv[1:3]",
+	"sys.argv = [entrypoint]",
+	"sys.path.insert(0, skill_root)",
+	"runpy.run_path(entrypoint, run_name='__main__')",
+].join("\n");
+
 export class PythonSkillRunner {
 	private readonly sourceEnvironment: Record<string, string | undefined>;
 	private readonly networkSandbox?: PythonNetworkSandbox;
@@ -371,13 +382,20 @@ export class PythonSkillRunner {
 		const provisioned = await this.environmentProvider.provision(manifest);
 		const staged = await stageEntrypoint(safePaths);
 		try {
+			const pythonArguments = [
+				"-I",
+				"-c",
+				ISOLATED_ENTRYPOINT_WRAPPER,
+				staged.entrypoint,
+				safePaths.skillRoot,
+			];
 			const command =
 				manifest.network === "deny"
 					? this.networkSandbox?.buildCommand(
 							provisioned.pythonPath,
-							staged.entrypoint,
+							pythonArguments,
 						)
-					: [provisioned.pythonPath, staged.entrypoint];
+					: [provisioned.pythonPath, ...pythonArguments];
 			if (command === undefined || command.length === 0) {
 				throw new PythonSkillRunnerError(
 					"Python network sandbox returned no command",
@@ -400,7 +418,6 @@ export class PythonSkillRunner {
 				const value = this.sourceEnvironment[name];
 				if (value !== undefined) environment[name] = value;
 			}
-			environment.PYTHONPATH = safePaths.skillRoot;
 
 			const processHandle = Bun.spawn({
 				cmd: command,

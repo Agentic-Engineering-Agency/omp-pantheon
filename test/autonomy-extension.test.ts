@@ -273,7 +273,7 @@ afterEach(async () => {
 });
 
 describe("autonomy extension", () => {
-	test("registers one autonomy command and removes promise-loop commands", async () => {
+	test("registers Prime host commands and removes promise-loop commands", async () => {
 		const { commands, tools } = await createFakeExtension();
 
 		expect(Object.keys(commands)).toEqual(["autonomy"]);
@@ -282,12 +282,108 @@ describe("autonomy extension", () => {
 		expect(Object.keys(tools)).toEqual(["autonomy_gate"]);
 	});
 
-	test("Pantheon entrypoint registers autonomy instead of legacy loops", async () => {
+	test("Pantheon entrypoint registers Prime host commands instead of legacy loops", async () => {
 		const { commands, tools } = await createFakeExtension(registerPantheon);
 
-		expect(Object.keys(commands)).toEqual(["autonomy"]);
+		expect(Object.keys(commands)).toEqual([
+			"autonomy",
+			"refinement",
+			"python-skill",
+		]);
 		expect(Object.keys(tools)).toEqual(["autonomy_gate"]);
 	});
+
+	test("entrypoint exposes human refinement proposal and lifecycle commands", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-prime-host-"));
+		roots.push(cwd);
+		await mkdir(join(cwd, "skills", "review"), { recursive: true });
+		await writeFile(join(cwd, "skills", "review", "SKILL.md"), "original\n");
+		await writeFile(join(cwd, "candidate.md"), "candidate\n");
+		const { commands, ctx, notifications } = await createFakeExtension(
+			registerPantheon,
+			{ cwd },
+		);
+
+		await commands.refinement?.handler(
+			JSON.stringify({
+				action: "propose",
+				artifact: "skills/review/SKILL.md",
+				candidate: "candidate.md",
+				author: "agent:refiner",
+				source: "evalfly:run-42",
+			}),
+			ctx,
+		);
+		const proposalId = notifications.at(-1)?.match(/Refinement ([^ ]+)/)?.[1];
+		if (proposalId === undefined) throw new Error("proposal ID missing");
+		await commands.refinement?.handler(
+			JSON.stringify({
+				action: "validate",
+				id: proposalId,
+				evidence: "evalfly:report-42",
+			}),
+			ctx,
+		);
+		await commands.refinement?.handler(
+			JSON.stringify({
+				action: "approve",
+				id: proposalId,
+				approvedBy: "user:sebastian",
+			}),
+			ctx,
+		);
+		await commands.refinement?.handler(
+			JSON.stringify({
+				action: "activate",
+				id: proposalId,
+				candidate: "candidate.md",
+			}),
+			ctx,
+		);
+
+		expect(notifications.at(-1)).toContain("is active");
+		expect(
+			await readFile(join(cwd, "skills", "review", "SKILL.md"), "utf8"),
+		).toBe("candidate\n");
+	});
+
+	test("entrypoint discovers and executes an installed Python skill", async () => {
+		if (Bun.which("python3") === null) return;
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-prime-python-"));
+		roots.push(cwd);
+		const skillRoot = join(cwd, ".omp", "python-skills", "echo");
+		await mkdir(skillRoot, { recursive: true });
+		await writeFile(
+			join(skillRoot, "manifest.json"),
+			JSON.stringify({
+				id: "echo",
+				python: ">=3.11,<3.15",
+				dependencies: [],
+				entrypoint: "main.py",
+				timeoutMs: 10_000,
+				environment: [],
+				network: "inherit",
+				maxOutputBytes: 4096,
+				input: { type: "object", required: ["message"] },
+				output: { type: "object", required: ["message"] },
+			}),
+		);
+		await writeFile(
+			join(skillRoot, "main.py"),
+			'import json, sys\ndata = json.load(sys.stdin)\njson.dump({"message": data["message"]}, sys.stdout)\n',
+		);
+		const { commands, ctx, notifications } = await createFakeExtension(
+			registerPantheon,
+			{ cwd },
+		);
+
+		await commands["python-skill"]?.handler(
+			'run {"id":"echo","input":{"message":"installed"}}',
+			ctx,
+		);
+
+		expect(notifications.at(-1)).toBe('info:{"message":"installed"}');
+	}, 20_000);
 
 	test("starts opt-in state and reports status", async () => {
 		const { commands, ctx, messages, notifications } =

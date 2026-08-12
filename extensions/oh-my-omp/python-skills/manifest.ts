@@ -104,10 +104,11 @@ export function validatePythonSkillManifest(
 		isAbsolute(rawEntrypoint) ||
 		entrypoint === ".." ||
 		entrypoint.startsWith(`..${sep}`) ||
+		entrypoint.includes(sep) ||
 		!entrypoint.endsWith(".py")
 	) {
 		throw new PythonSkillManifestError(
-			"Python skill entrypoint must be a project-relative .py file",
+			"Python skill entrypoint must be one project-root .py file",
 		);
 	}
 	if (

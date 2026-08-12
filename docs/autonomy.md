@@ -74,7 +74,6 @@ Project-local state:
 ```text
 .pi/refinement/ledger.jsonl                     refinement history
 .pi/refinement/quarantine.jsonl                 malformed ledger evidence
-.pi/refinement/snapshots/<proposal-id>.json       rollback bytes, mode, and checksum
 ```
 
 Private per-user operational state:
@@ -87,6 +86,7 @@ ${XDG_STATE_HOME:-~/.local/state}/omp-pantheon/
   autonomy/<project-hash>/runs/<run-id>/scheduler/manifest.json
   autonomy/<project-hash>/runs/<run-id>/scheduler/generations/<n>/snapshot.json
   autonomy/<project-hash>/runs/<run-id>/scheduler/generations/<n>/events.jsonl
+  refinement/<project-hash>/snapshots/<proposal-id>.json
   python-skills/<project-hash>/venvs/<content-hash>/
   specsafe/<project-hash>/closures/<instance-hash>.json
 ```
@@ -105,13 +105,31 @@ proposed → validated → approved → active → rolled_back
 
 Validation evidence is required before approval. Approval is a host-adapter operation, not a registered model tool; `approvedBy` records the trusted host identity supplied by that adapter and is provenance, not independent authentication. Activation accepts the separately validated candidate bytes, verifies their exact proposal content hash and the artifact's base hash, writes a checksummed rollback snapshot, atomically installs the candidate with a final drift check, then records `active` under the same ledger lock. If execution stops after installation but before the ledger append, retrying activation recognizes the exact candidate bytes plus valid snapshot and completes the missing event without rewriting the artifact. Rollback restores the snapshotted bytes and mode atomically only when the artifact still matches either the approved candidate hash or an already-restored base hash, so unrelated edits fail closed. Rejection, quarantine, and rollback retain their reasons in the ledger. No proposal executes itself.
 
+The installed extension exposes this lifecycle only as the human slash command
+`/refinement`; no model-callable refinement tool exists. Use `list`, or pass one
+JSON object for a transition:
+
+```text
+/refinement {"action":"propose","artifact":"skills/x/SKILL.md","candidate":"candidate.md","author":"agent:refiner","source":"evalfly:run-id"}
+/refinement {"action":"validate","id":"proposal-id","evidence":"evalfly:report-id"}
+/refinement {"action":"approve","id":"proposal-id","approvedBy":"user:name"}
+/refinement {"action":"activate","id":"proposal-id","candidate":"candidate.md"}
+/refinement {"action":"reject","id":"proposal-id","reason":"reason"}
+/refinement {"action":"rollback","id":"proposal-id","reason":"reason"}
+/refinement {"action":"quarantine","id":"proposal-id","reason":"reason"}
+```
+
+Artifact and candidate inputs must be project-relative, non-symlinked,
+singly-linked regular files. Rollback bytes live only in private per-user state,
+not in Git-visible project state.
+
 ## Python skill policy
 
 Python skills run under a manifest contract:
 
 - bounded Python version range;
 - exact `package==version` dependency pins;
-- project-relative `.py` entrypoint approved as a singly linked regular file below the canonical, non-symlinked skill root, with no symlinked path component; after environment provisioning the runner reopens it with `O_NOFOLLOW`, verifies the descriptor identity and approved hash, and executes a private staged copy of those exact bytes;
+- one project-root `.py` entrypoint approved as a singly linked regular file below the canonical, non-symlinked skill root; after environment provisioning the runner reopens it with `O_NOFOLLOW`, verifies descriptor identity and approved hash, and executes a private staged copy under isolated Python startup;
 - JSON-object input and output contracts; input is serialized and revalidated before provisioning or process spawn;
 - bounded timeout and output size;
 - environment variables require both a manifest request and a host-owned allowlist;
@@ -123,6 +141,19 @@ Python skills run under a manifest contract:
 - duplicate skill IDs are rejected across a loaded manifest collection.
 
 The environment hash includes the Python requirement and sorted dependency pins. A second run with the same contract reuses the existing environment. The manifest cannot self-authorize access to host secrets.
+
+Install a skill at `.omp/python-skills/<directory>/manifest.json` with its
+project-root entrypoint beside the manifest. The installed extension exposes
+`/python-skill list` and:
+
+```text
+/python-skill run {"id":"skill-id","input":{"key":"value"}}
+```
+
+This is a human slash-command bridge, not a model-callable tool. Duplicate IDs
+across discovered manifests fail closed. Stock Pantheon has no OS network
+sandbox adapter, so a manifest declaring `network: deny` is rejected rather
+than run.
 
 ## Capability-gated OMP state
 

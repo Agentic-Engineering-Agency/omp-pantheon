@@ -48,9 +48,10 @@ flows, and make it harder for an agent to simply say “done” without proof.
   and PASS/FAIL/INCONCLUSIVE verdicts.
 - **Guardrails and lifecycle hooks** for todos, approvals, intent checks,
   comments, SpecSafe sessions/subagents, fallback audits, and artifact hygiene.
-- **Approval-gated refinement and isolated Python skills** with checksummed
-  ledgers, content-addressed environments, strict JSON contracts, resource
-  bounds, and fail-closed network policy.
+- **Approval-gated refinement and isolated Python skills** exposed through
+  human slash commands, with checksummed ledgers, private rollback snapshots,
+  content-addressed environments, strict JSON contracts, resource bounds, and
+  fail-closed network policy.
 - **Dogfooding:** this repo contains its own root `evals/` smoke suite that
   protects critical harness files and proves EvalFly works on the harness itself.
 
@@ -95,7 +96,7 @@ local, inspectable, hackable, and shaped around an eval-first engineering loop.
 | Enforcement | Normal harness/tool completion behavior. | Adds explicit local EvalFly enforcement: `evalfly enforce start` writes project-local state and the OMP stop gate blocks completion without fresh matching passing evidence. |
 | Branch QA | Whatever the user asks the agent to test. | Adds `agentic-branch-e2e`: freeze criteria first, run real user flows, capture UI/network/log/backend evidence, drive negative cases, and emit PASS/FAIL/INCONCLUSIVE. |
 | Verified autonomy | No Pantheon-specific durable objective runtime. | Adds opt-in `/autonomy`, native-goal and targeted-command gates, conditional exact EvalFly/SpecSafe adapters, broker-managed session resumption, leased/fenced command delivery, persisted scheduling, and bounded retries. |
-| Refinement/Python skills | General extension and tool mechanisms. | Adds approval-gated append-only refinement plus manifest-driven isolated Python execution with exact pins and content-addressed environments. |
+| Refinement/Python skills | General extension and tool mechanisms. | Adds human-only `/refinement` and `/python-skill` commands for approval-gated append-only refinement plus manifest-driven isolated Python execution with exact pins and content-addressed environments. |
 | Safety boundary | OMP permissions and configured hooks. | Adds intent gates, approval gates, comment checks, SpecSafe hooks, EvalFly artifact hardening, privacy checks for sanitized traces, and non-global opt-in enforcement. |
 | Dogfooding | Not applicable. | The repo contains its own `evals/` smoke suite protecting critical harness files and tests that keep the suite synchronized. |
 
@@ -130,8 +131,10 @@ Implemented and verified in this bundle:
 - opt-in `/autonomy` commands and the `autonomy_gate` tool;
 - durable autonomy state, command queue, persisted scheduler generations,
   lease/fencing recovery, and broker-managed `pantheon-agentd`;
-- append-only, checksummed, approval-gated refinement;
-- manifest-validated isolated Python skill execution with environment reuse;
+- human-only `/refinement` lifecycle with append-only, checksummed approval
+  history and private rollback snapshots;
+- human-only `/python-skill` discovery/execution for manifest-validated isolated
+  Python skills with environment reuse;
 - capability-gated checkpoint and retained-agent contracts that fail honestly
   when stock OMP 17.2.14 lacks the required public APIs.
 

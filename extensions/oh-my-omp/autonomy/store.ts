@@ -31,6 +31,8 @@ interface AutonomyStoreOptions {
 	stateDirectory?: string;
 }
 
+export type AutonomyStateUpdate = (state: AutonomyRun) => AutonomyRun;
+
 export class AutonomyStore {
 	readonly statePath: string;
 	readonly journalPath: string;
@@ -99,32 +101,67 @@ export class AutonomyStore {
 					`Autonomy revision conflict: expected ${expectedRevision}, found ${currentRevision}`,
 				);
 			}
-
-			const eventWithoutChecksum = {
-				schemaVersion: 1 as const,
-				sequence: state.revision,
-				at: state.updatedAt,
-				state,
-			};
-			const checksum = createHash("sha256")
-				.update(JSON.stringify(eventWithoutChecksum))
-				.digest("hex");
-			const event: AutonomyJournalEvent = {
-				...eventWithoutChecksum,
-				checksum,
-			};
-			await appendPrivateFile(this.journalPath, `${JSON.stringify(event)}\n`);
-
-			const temporaryPath = `${this.statePath}.${randomUUID()}.tmp`;
-			await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, {
-				encoding: "utf8",
-				flag: "wx",
-				mode: 0o600,
-			});
-			await rename(temporaryPath, this.statePath);
+			await this.writeLocked(state);
 		} finally {
 			await release();
 		}
+	}
+
+	async update(
+		expectedRunId: string,
+		change: AutonomyStateUpdate,
+	): Promise<AutonomyRun> {
+		await this.assertSafeStatePath();
+		const directory = dirname(this.statePath);
+		await ensurePrivateDirectory(directory);
+		const release = await acquireFileLock(this.lockPath);
+		try {
+			const current = await this.load();
+			if (current === null) {
+				throw new AutonomyStoreError("No autonomy run exists");
+			}
+			if (current.id !== expectedRunId) {
+				throw new AutonomyStoreError(
+					`Autonomy run changed from ${expectedRunId} to ${current.id}`,
+				);
+			}
+			const next = change(current);
+			if (next.id !== current.id || next.revision !== current.revision + 1) {
+				throw new AutonomyStoreError(
+					"Atomic autonomy update must preserve the run and advance one revision",
+				);
+			}
+			this.assertState(next, "state");
+			await this.writeLocked(next);
+			return next;
+		} finally {
+			await release();
+		}
+	}
+
+	private async writeLocked(state: AutonomyRun): Promise<void> {
+		const eventWithoutChecksum = {
+			schemaVersion: 1 as const,
+			sequence: state.revision,
+			at: state.updatedAt,
+			state,
+		};
+		const checksum = createHash("sha256")
+			.update(JSON.stringify(eventWithoutChecksum))
+			.digest("hex");
+		const event: AutonomyJournalEvent = {
+			...eventWithoutChecksum,
+			checksum,
+		};
+		await appendPrivateFile(this.journalPath, `${JSON.stringify(event)}\n`);
+
+		const temporaryPath = `${this.statePath}.${randomUUID()}.tmp`;
+		await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, {
+			encoding: "utf8",
+			flag: "wx",
+			mode: 0o600,
+		});
+		await rename(temporaryPath, this.statePath);
 	}
 
 	private async assertSafeStatePath(): Promise<void> {
