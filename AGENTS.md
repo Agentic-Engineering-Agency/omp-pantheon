@@ -2,8 +2,6 @@
 
 This repository supplies the OMP agents, skills, evaluations, guardrails, extensions, and workflow integrations used by local agentic-engineering projects.
 
-Workspace standards apply here: [../docs/standards/README.md](../docs/standards/README.md).
-This file adds only what is specific to this repo. Where they conflict, this file wins, and the conflict is recorded under `## Deviations`.
 
 ## Stack
 
