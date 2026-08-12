@@ -447,7 +447,7 @@ export class AutonomyRuntime {
 			);
 		}
 		const verificationToken = randomUUID();
-		await controller.beginVerification(
+		const verificationState = await controller.beginVerification(
 			state.id,
 			{
 				attempt: state.attempt,
@@ -493,10 +493,11 @@ export class AutonomyRuntime {
 						verificationToken,
 					);
 		if (
-			evidenceState.id !== state.id ||
-			evidenceState.attempt !== state.attempt ||
+			evidenceState.id !== verificationState.id ||
+			evidenceState.attempt !== verificationState.attempt ||
 			evidenceState.artifactRevision !==
-				state.artifactRevision + (receipt.artifactHash === undefined ? 0 : 1)
+				verificationState.artifactRevision +
+					(receipt.artifactHash === undefined ? 0 : 1)
 		) {
 			throw new AutonomyTransitionError(
 				"Verification result became stale after the current run changed",

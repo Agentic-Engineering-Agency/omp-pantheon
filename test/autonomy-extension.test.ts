@@ -1190,6 +1190,50 @@ describe("autonomy extension", () => {
 		expect(current?.verificationLease).toBeUndefined();
 	});
 
+	test("accepts verification evidence after reclaiming an orphaned lease", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-orphaned-verifier-"));
+		const stateHome = join(cwd, ".test-state");
+		roots.push(cwd);
+		const sessionFile = join(cwd, "session.jsonl");
+		const extension = await createFakeExtension(registerTestAutonomy, {
+			cwd,
+			sessionFile,
+		});
+		await extension.commands.autonomy?.handler(
+			'start "Recover verifier" --max-attempts=2',
+			extension.ctx,
+		);
+		const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+		const store = new AutonomyStore(cwd, { stateDirectory });
+		const original = await store.load();
+		if (original === null) throw new Error("Expected autonomy run");
+		await store.update(original.id, (state) => ({
+			...state,
+			revision: state.revision + 1,
+			verificationLease: {
+				token: "orphaned-token",
+				ownerPid: 2_147_483_647,
+				startedAt: "2026-08-11T12:00:00.000Z",
+			},
+		}));
+
+		const result = await extension.tools.autonomy_gate?.execute(
+			"recovered-verification",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		const current = await store.load();
+
+		expect(result?.content[0]?.text).toContain("recorded");
+		expect(current?.artifactRevision).toBe(1);
+		expect(current?.verificationLease).toBeUndefined();
+		expect(
+			current?.gates.find((gate) => gate.id === "verification")?.status,
+		).toBe("pass");
+	});
+
 	test("invalidates gate evidence when verification mutates artifacts", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "pantheon-autonomy-verify-write-"),
