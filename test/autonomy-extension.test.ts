@@ -1,6 +1,8 @@
+import { watch } from "node:fs";
 import {
 	mkdir,
 	mkdtemp,
+	readFile,
 	realpath,
 	rm,
 	stat,
@@ -8,13 +10,16 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { AutonomyController } from "../extensions/oh-my-omp/autonomy/controller";
 import { CommandJournal } from "../extensions/oh-my-omp/autonomy/journal";
-import { registerAutonomy } from "../extensions/oh-my-omp/autonomy/runtime";
+import {
+	type AutonomyRuntime,
+	registerAutonomy,
+} from "../extensions/oh-my-omp/autonomy/runtime";
 import {
 	autonomyProjectStateRoot,
 	autonomyRuntimeRoot,
@@ -51,6 +56,10 @@ interface FakeContext {
 		notify: (message: string, level: string) => void;
 	};
 }
+
+type OwnedFakeContext = FakeContext & {
+	sessionManager: NonNullable<FakeContext["sessionManager"]>;
+};
 
 type EventHandler = (event: unknown, ctx: FakeContext) => Promise<void> | void;
 
@@ -150,6 +159,40 @@ async function loadTestState(cwd: string) {
 	return new AutonomyStore(cwd, {
 		stateDirectory: autonomyProjectStateRoot(cwd, join(cwd, ".test-state")),
 	}).load();
+}
+
+async function readTextWhenCreated(path: string): Promise<string> {
+	try {
+		return await readFile(path, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	const { promise, resolve, reject } = Promise.withResolvers<string>();
+	const watcher = watch(dirname(path), async (_event, filename) => {
+		if (filename?.toString() !== basename(path)) return;
+		try {
+			const contents = await readFile(path, "utf8");
+			watcher.close();
+			resolve(contents);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				watcher.close();
+				reject(error);
+			}
+		}
+	});
+	watcher.on("error", reject);
+	return promise;
+}
+
+function expectProcessNotAlive(pid: number): void {
+	try {
+		process.kill(pid, 0);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+		throw error;
+	}
+	throw new Error(`Process ${pid} survived cancellation`);
 }
 
 interface FakeExtensionOptions {
@@ -310,6 +353,135 @@ describe("autonomy extension", () => {
 				stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
 			}).load(),
 		).toBeNull();
+	});
+
+	test("start bootstrap failure pauses with lastError and can resume", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-start-fail-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-start-fail-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const bootstrapError = new Error("agentd start unavailable");
+		const starts: string[] = [];
+		const stops: string[] = [];
+		let failStart = true;
+		let runtime: AutonomyRuntime | undefined;
+		const extension = await createFakeExtension(
+			(pi) => {
+				runtime = registerAutonomy(
+					pi,
+					{
+						async verify() {
+							return { status: "pass", evidence: "exit:0" };
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start(runId) {
+								starts.push(runId);
+								if (failStart) throw bootstrapError;
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop(runId) {
+								stops.push(runId);
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				);
+			},
+			{ cwd, sessionFile: join(cwd, "session.jsonl") },
+		);
+		if (runtime === undefined) throw new Error("Expected runtime");
+		const ownedCtx = extension.ctx as OwnedFakeContext;
+
+		let thrown: unknown;
+		try {
+			await runtime.start("Retry bootstrap", 2, "bun test", ownedCtx);
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toBe(bootstrapError);
+
+		const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+		const failed = await new AutonomyStore(cwd, { stateDirectory }).load();
+		if (failed === null) throw new Error("Expected compensated autonomy state");
+		expect(failed.status).toBe("paused");
+		expect(failed.lastError).toBe("agentd start unavailable");
+		expect(starts).toEqual([failed.id]);
+		expect(stops).toEqual([failed.id]);
+
+		failStart = false;
+		await runtime.resume(ownedCtx);
+
+		const resumed = await new AutonomyStore(cwd, { stateDirectory }).load();
+		expect(resumed?.status).toBe("running");
+		expect(resumed?.lastError).toBeUndefined();
+		expect(starts).toEqual([failed.id, failed.id]);
+	});
+
+	test("resume scheduling failure stops worker and leaves paused lastError", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-resume-fail-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-resume-fail-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const starts: string[] = [];
+		const stops: string[] = [];
+		let runtime: AutonomyRuntime | undefined;
+		const extension = await createFakeExtension(
+			(pi) => {
+				runtime = registerAutonomy(
+					pi,
+					{
+						async verify() {
+							return { status: "pass", evidence: "exit:0" };
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start(runId) {
+								starts.push(runId);
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop(runId) {
+								stops.push(runId);
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				);
+			},
+			{ cwd, sessionFile: join(cwd, "session.jsonl") },
+		);
+		if (runtime === undefined) throw new Error("Expected runtime");
+		const ownedCtx = extension.ctx as OwnedFakeContext;
+		await runtime.start("Schedule safely", 2, "bun test", ownedCtx);
+		await runtime.pause(extension.ctx);
+		const stateDirectory = autonomyProjectStateRoot(cwd, stateHome);
+		const paused = await new AutonomyStore(cwd, { stateDirectory }).load();
+		if (paused === null) throw new Error("Expected paused autonomy state");
+		const runRoot = autonomyRuntimeRoot(cwd, paused.id, stateHome);
+		await mkdir(dirname(runRoot), { recursive: true });
+		await writeFile(runRoot, "not a directory");
+
+		await expect(runtime.resume(ownedCtx)).rejects.toThrow("EEXIST");
+
+		const compensated = await new AutonomyStore(cwd, { stateDirectory }).load();
+		expect(compensated?.status).toBe("paused");
+		expect(compensated?.lastError).toContain("EEXIST");
+		expect(starts).toEqual([paused.id, paused.id]);
+		expect(stops).toEqual([paused.id, paused.id]);
 	});
 
 	test("completes only after native goal and verification evidence pass", async () => {
@@ -589,7 +761,7 @@ describe("autonomy extension", () => {
 		roots.push(projectA, projectB, stateHome);
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
-		let runtime: ReturnType<typeof registerAutonomy> | undefined;
+		let runtime: AutonomyRuntime | undefined;
 		const extension = await createFakeExtension(
 			(pi) => {
 				runtime = registerAutonomy(
@@ -746,6 +918,20 @@ describe("autonomy extension", () => {
 		);
 	});
 
+	test("rejects a symlinked private state home", async () => {
+		const project = await mkdtemp(join(tmpdir(), "pantheon-state-project-"));
+		const outside = await mkdtemp(join(tmpdir(), "pantheon-state-outside-"));
+		const container = await mkdtemp(join(tmpdir(), "pantheon-state-link-"));
+		const stateHome = join(container, "state");
+		await symlink(outside, stateHome);
+		roots.push(project, outside, container);
+
+		await expect(
+			prepareAutonomyProjectStateRoot(project, stateHome),
+		).rejects.toThrow("not an owned directory");
+		expect(await Bun.file(join(outside, "omp-pantheon")).exists()).toBe(false);
+	});
+
 	test("rejects stale verification evidence after run replacement", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-verify-race-"));
 		const stateHome = await mkdtemp(
@@ -826,6 +1012,134 @@ describe("autonomy extension", () => {
 		expect(
 			(await store.load())?.gates.find((gate) => gate.id === "verification")
 				?.status,
+		).toBe("pending");
+	});
+
+	test("aborted verification before launch records no receipt", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-abort-early-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-abort-early-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const marker = join(cwd, "spawned");
+		let runtime: AutonomyRuntime | undefined;
+		const extension = await createFakeExtension(
+			(pi) => {
+				runtime = registerAutonomy(pi, undefined, {
+					stateHome,
+					agentdFactory: () => ({
+						async start() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async status() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async stop() {
+							return { state: "stopped", restartCount: 0 };
+						},
+						close() {},
+					}),
+				});
+			},
+			{ cwd, sessionFile: join(cwd, "session.jsonl") },
+		);
+		if (runtime === undefined) throw new Error("Expected runtime");
+		const ownedCtx = extension.ctx as OwnedFakeContext;
+		const script = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "spawned")`;
+		await runtime.start(
+			"Abort before spawn",
+			2,
+			`${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+			ownedCtx,
+		);
+		const abort = new AbortController();
+		abort.abort();
+
+		await expect(
+			extension.tools.autonomy_gate?.execute(
+				"aborted-before-spawn",
+				{},
+				abort.signal,
+				undefined,
+				extension.ctx,
+			),
+		).rejects.toMatchObject({ name: "AbortError" });
+
+		expect(await Bun.file(marker).exists()).toBe(false);
+		const state = await new AutonomyStore(cwd, {
+			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+		}).load();
+		expect(
+			state?.gates.find((gate) => gate.id === "verification")?.status,
+		).toBe("pending");
+	});
+
+	test("aborted verification terminates spawned process tree without a receipt", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-abort-tree-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-autonomy-abort-tree-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const parentPidPath = join(cwd, "parent.pid");
+		const childPidPath = join(cwd, "child.pid");
+		let runtime: AutonomyRuntime | undefined;
+		const extension = await createFakeExtension(
+			(pi) => {
+				runtime = registerAutonomy(pi, undefined, {
+					stateHome,
+					agentdFactory: () => ({
+						async start() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async status() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async stop() {
+							return { state: "stopped", restartCount: 0 };
+						},
+						close() {},
+					}),
+				});
+			},
+			{ cwd, sessionFile: join(cwd, "session.jsonl") },
+		);
+		if (runtime === undefined) throw new Error("Expected runtime");
+		const ownedCtx = extension.ctx as OwnedFakeContext;
+		const script = [
+			'const { spawn } = require("node:child_process");',
+			'const fs = require("node:fs");',
+			`fs.writeFileSync(${JSON.stringify(parentPidPath)}, String(process.pid));`,
+			"const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+			`fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+			"setInterval(() => {}, 1000);",
+		].join("");
+		await runtime.start(
+			"Abort process tree",
+			2,
+			`${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+			ownedCtx,
+		);
+		const abort = new AbortController();
+		const verification = extension.tools.autonomy_gate?.execute(
+			"aborted-process-tree",
+			{},
+			abort.signal,
+			undefined,
+			extension.ctx,
+		);
+		const parentPid = Number((await readTextWhenCreated(parentPidPath)).trim());
+		const childPid = Number((await readTextWhenCreated(childPidPath)).trim());
+
+		abort.abort();
+
+		await expect(verification).rejects.toMatchObject({ name: "AbortError" });
+		expectProcessNotAlive(parentPid);
+		expectProcessNotAlive(childPid);
+		const state = await new AutonomyStore(cwd, {
+			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+		}).load();
+		expect(
+			state?.gates.find((gate) => gate.id === "verification")?.status,
 		).toBe("pending");
 	});
 

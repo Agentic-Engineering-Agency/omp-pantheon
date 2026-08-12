@@ -11,6 +11,7 @@ export interface CommandExecutor {
 	execute(
 		command: WorkerCommand,
 		signal: AbortSignal,
+		onDispatched: () => Promise<void>,
 	): Promise<CommandPersistenceReceipt>;
 	close(): Promise<void>;
 }
@@ -87,6 +88,7 @@ export class OmpSessionExecutor implements CommandExecutor {
 	async execute(
 		command: WorkerCommand,
 		signal: AbortSignal,
+		onDispatched: () => Promise<void> = async () => {},
 	): Promise<CommandPersistenceReceipt> {
 		if (this.#closed) throw new Error("OMP session executor is closed");
 		if (signal.aborted) throw new Error("OMP session execution aborted");
@@ -98,14 +100,16 @@ export class OmpSessionExecutor implements CommandExecutor {
 			sessionManager,
 		});
 		this.#activeSessions.add(session);
+		let failure: unknown;
+		let abortDisposal: Promise<void> | undefined;
 		const abort = (): void => {
-			void session.dispose();
+			abortDisposal ??= session.dispose();
 		};
 		signal.addEventListener("abort", abort, { once: true });
 		let promptDispatched = false;
 		let receipt: CommandPersistenceReceipt | undefined;
-		let failure: unknown;
 		try {
+			await onDispatched();
 			promptDispatched = true;
 			await session.prompt(command.prompt);
 			await session.waitForIdle();
@@ -124,8 +128,8 @@ export class OmpSessionExecutor implements CommandExecutor {
 				: error;
 		} finally {
 			signal.removeEventListener("abort", abort);
-			this.#activeSessions.delete(session);
 			try {
+				await abortDisposal;
 				await session.dispose();
 			} catch (error) {
 				failure ??= promptDispatched
@@ -194,6 +198,7 @@ export class AutonomyWorker {
 		const controller = new AbortController();
 		this.#activeExecution = controller;
 		let heartbeatFailure: unknown;
+		let dispatched = false;
 		let renewing = Promise.resolve();
 		const heartbeat = setInterval(
 			() => {
@@ -220,6 +225,14 @@ export class AutonomyWorker {
 				receipt = await this.executor.execute(
 					claimed.command,
 					controller.signal,
+					async () => {
+						await this.journal.markDispatched(
+							claimed.command.id,
+							this.options.workerId,
+							claimed.fencingToken,
+						);
+						dispatched = true;
+					},
 				);
 			} catch (error) {
 				await renewing;
@@ -227,6 +240,7 @@ export class AutonomyWorker {
 				const message =
 					failure instanceof Error ? failure.message : String(failure);
 				if (
+					dispatched ||
 					heartbeatFailure !== undefined ||
 					error instanceof CommandPersistenceUncertainError
 				) {

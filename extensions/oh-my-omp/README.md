@@ -8,7 +8,9 @@ the Seshat/SpecSafe runtime into the local harness.
 ## What's in this bundle
 
 ### Extension (`./index.ts`)
-- Advertises `~/.omp/agent/skills/` via `resources_discover`.
+- Advertises this repository's bundled `skills/` directory via
+  `resources_discover`; `install.sh` separately exposes the installed bundle
+  beneath `~/.omp/agent/`.
 - Owns the opt-in **verified autonomy runtime**: exact native OMP goal
   ownership, a fixed host-run verification command, bounded attempts,
   checksummed/CAS private state, and a run-scoped broker worker.

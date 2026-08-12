@@ -118,7 +118,10 @@ export async function reconcileResidentTerminal(
 			finalized.status,
 		);
 	}
-	if (record?.status === "claimed" && record.workerId !== undefined) {
+	if (
+		(record?.status === "claimed" || record?.status === "dispatched") &&
+		record.workerId !== undefined
+	) {
 		record = await journal.markUncertain(
 			record.command.id,
 			record.workerId,
@@ -296,12 +299,15 @@ async function runAgentd(args: string[]): Promise<void> {
 		stateDirectory: autonomyProjectStateRoot(root),
 	});
 	updateAgentdProcessContext(runId);
+	await journal.fenceOrphanedDispatches(
+		"Resident worker restarted after command dispatch before acknowledgement",
+	);
 	const executor = new OmpSessionExecutor();
 	const residentExecutor: CommandExecutor = {
-		async execute(command, signal) {
+		async execute(command, signal, onDispatched) {
 			updateAgentdProcessContext(runId, command.id);
 			try {
-				return await executor.execute(command, signal);
+				return await executor.execute(command, signal, onDispatched);
 			} finally {
 				updateAgentdProcessContext(runId);
 			}

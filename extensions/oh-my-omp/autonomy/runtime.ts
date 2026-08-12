@@ -9,6 +9,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent";
 
 import { canonicalProjectRoot } from "../private-state";
+import { terminateProcessTree } from "../python-skills/process-tree";
 import {
 	type AgentdStatus,
 	AutonomyAgentd,
@@ -35,6 +36,12 @@ interface NativeGoalUpdatedEvent {
 		status: string;
 	} | null;
 }
+interface AutonomySessionContext {
+	cwd: string;
+	sessionManager?: {
+		getSessionFile(): string | undefined;
+	};
+}
 
 const ACTIVE_STATUSES: Partial<Record<AutonomyRun["status"], true>> = {
 	running: true,
@@ -58,20 +65,44 @@ export interface VerificationRunner {
 
 const defaultVerificationRunner: VerificationRunner = {
 	async verify(cwd, command, signal) {
+		if (signal?.aborted) {
+			throw new DOMException("Autonomy verification aborted", "AbortError");
+		}
 		const child = Bun.spawn({
 			cmd: [process.env.SHELL ?? "/bin/sh", "-lc", command],
 			cwd,
 			stdout: "ignore",
 			stderr: "ignore",
+			detached: true,
 		});
-		const abort = (): void => child.kill("SIGKILL");
+		let aborted = false;
+		let terminationPromise: Promise<void> | null = null;
+		const terminate = (): Promise<void> => {
+			terminationPromise ??= terminateProcessTree(child);
+			return terminationPromise;
+		};
+		const abort = (): void => {
+			aborted = true;
+			void terminate().catch(() => undefined);
+		};
 		signal?.addEventListener("abort", abort, { once: true });
+		if (signal?.aborted) abort();
 		try {
 			const exitCode = await child.exited;
+			if (aborted || signal?.aborted) {
+				if (terminationPromise !== null) await terminationPromise;
+				throw new DOMException("Autonomy verification aborted", "AbortError");
+			}
 			return {
 				status: exitCode === 0 ? "pass" : "fail",
 				evidence: `command:${command}:exit:${exitCode}`,
 			};
+		} catch (error) {
+			if (aborted || signal?.aborted) {
+				await terminate();
+				throw new DOMException("Autonomy verification aborted", "AbortError");
+			}
+			throw error;
 		} finally {
 			signal?.removeEventListener("abort", abort);
 		}
@@ -141,7 +172,13 @@ export class AutonomyRuntime {
 					new AutonomyAgentd(resolvedCwd, { stateHome }));
 		const state = await controller.get();
 		if (state !== null && ACTIVE_STATUSES[state.status] === true) {
-			await agentd?.start(state.id);
+			try {
+				await agentd?.start(state.id);
+			} catch (error) {
+				await this.compensateBootstrapFailure(controller, state, error, agentd);
+				agentd?.close();
+				throw error;
+			}
 		}
 		if (generation !== this.attachmentGeneration) {
 			agentd?.close();
@@ -161,7 +198,7 @@ export class AutonomyRuntime {
 		task: string,
 		maxAttempts: number,
 		verificationCommand: string,
-		ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,
+		ctx: AutonomySessionContext,
 	): Promise<AutonomyRun> {
 		this.requireRunProject(ctx);
 		const sessionFile = ctx.sessionManager?.getSessionFile();
@@ -170,7 +207,8 @@ export class AutonomyRuntime {
 				"Autonomy requires a persisted OMP session; --no-session is unsupported",
 			);
 		}
-		const state = await (await this.requireController()).start({
+		const controller = await this.requireController();
+		const state = await controller.start({
 			task,
 			maxAttempts,
 			verificationCommand,
@@ -181,7 +219,12 @@ export class AutonomyRuntime {
 			),
 			ownerSessionFile: resolve(sessionFile),
 		});
-		await this.agentd?.start(state.id);
+		try {
+			await this.agentd?.start(state.id);
+		} catch (error) {
+			await this.compensateBootstrapFailure(controller, state, error);
+			throw error;
+		}
 		return state;
 	}
 
@@ -232,14 +275,20 @@ export class AutonomyRuntime {
 
 	async resume(ctx: Pick<ExtensionContext, "cwd">): Promise<AutonomyRun> {
 		this.requireRunProject(ctx);
-		const state = await (await this.requireController()).resume();
-		await this.agentd?.start(state.id);
-		await this.scheduleContinuation(
-			state,
-			state.gates
-				.filter((gate) => gate.status !== "pass")
-				.map((gate) => gate.id),
-		);
+		const controller = await this.requireController();
+		const state = await controller.resume();
+		try {
+			await this.agentd?.start(state.id);
+			await this.scheduleContinuation(
+				state,
+				state.gates
+					.filter((gate) => gate.status !== "pass")
+					.map((gate) => gate.id),
+			);
+		} catch (error) {
+			await this.compensateBootstrapFailure(controller, state, error);
+			throw error;
+		}
 		return state;
 	}
 
@@ -268,7 +317,7 @@ export class AutonomyRuntime {
 
 	async runVerification(
 		signal: AbortSignal | undefined,
-		ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,
+		ctx: AutonomySessionContext,
 	): Promise<AutonomyRun> {
 		this.requireRunProject(ctx);
 		const controller = await this.requireController();
@@ -311,7 +360,7 @@ export class AutonomyRuntime {
 
 	async onGoalUpdated(
 		event: NativeGoalUpdatedEvent,
-		ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,
+		ctx: AutonomySessionContext,
 	): Promise<void> {
 		if (!this.ownsRunProject(ctx)) return;
 		if (event.goal === null) return;
@@ -404,7 +453,7 @@ export class AutonomyRuntime {
 
 	async onAgentEnd(
 		_event: AgentEndEvent,
-		ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,
+		ctx: AutonomySessionContext,
 	): Promise<void> {
 		if (!this.ownsRunProject(ctx)) return;
 		const controller = await this.requireController();
@@ -504,7 +553,12 @@ export class AutonomyRuntime {
 			state.id,
 			"schedule a continuation",
 		);
-		await this.scheduleContinuation(next, nextContinuation.pendingGateIds);
+		try {
+			await this.scheduleContinuation(next, nextContinuation.pendingGateIds);
+		} catch (error) {
+			await this.compensateBootstrapFailure(controller, next, error);
+			throw error;
+		}
 	}
 
 	async close(): Promise<void> {
@@ -574,7 +628,7 @@ export class AutonomyRuntime {
 
 	private ownsRunSession(
 		state: AutonomyRun,
-		ctx: Pick<ExtensionContext, "sessionManager">,
+		ctx: Pick<AutonomySessionContext, "sessionManager">,
 	): boolean {
 		const sessionFile = ctx.sessionManager?.getSessionFile();
 		return (
@@ -684,11 +738,32 @@ export class AutonomyRuntime {
 		const resolvedRunId =
 			runId ?? (await (await this.requireController()).get())?.id;
 		if (resolvedRunId === undefined) return;
+		await this.stopAgentdBestEffort(this.agentd, resolvedRunId);
+	}
+
+	private async stopAgentdBestEffort(
+		agentd: AgentdClient | null,
+		runId: string,
+	): Promise<void> {
+		if (agentd === null) return;
 		try {
-			await this.agentd.stop(resolvedRunId);
+			await agentd.stop(runId);
 		} catch {
 			this.pi.logger.debug("Autonomy worker was already stopped");
 		}
+	}
+
+	private async compensateBootstrapFailure(
+		controller: AutonomyController,
+		state: AutonomyRun,
+		error: unknown,
+		agentd: AgentdClient | null = this.agentd,
+	): Promise<void> {
+		await this.stopAgentdBestEffort(agentd, state.id);
+		await controller.pauseWithError(
+			error instanceof Error ? error.message : String(error),
+			state.id,
+		);
 	}
 
 	private async requireController(): Promise<AutonomyController> {

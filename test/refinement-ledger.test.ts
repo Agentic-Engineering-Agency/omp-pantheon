@@ -20,6 +20,7 @@ import {
 } from "../extensions/oh-my-omp/refinement/ledger";
 const BASE_CONTENT = "original\n";
 const CANDIDATE_CONTENT = "candidate\n";
+const CANDIDATE_BYTES = Buffer.from(CANDIDATE_CONTENT);
 const hashContent = (content: string): string =>
 	`sha256:${createHash("sha256").update(content).digest("hex")}`;
 const BASE_HASH = hashContent(BASE_CONTENT);
@@ -27,16 +28,22 @@ const CANDIDATE_HASH = hashContent(CANDIDATE_CONTENT);
 
 const roots: string[] = [];
 
-async function createLedger() {
+async function createLedger(options?: {
+	afterCandidateInstall?: () => Promise<void> | void;
+}) {
 	const root = await mkdtemp(join(tmpdir(), "pantheon-refinement-"));
 	roots.push(root);
 	await mkdir(join(root, "skills", "review"), { recursive: true });
 	await writeFile(join(root, "skills", "review", "SKILL.md"), BASE_CONTENT);
 	let sequence = 0;
-	const ledger = new RefinementLedger(root, {
+	const ledgerOptions = {
 		now: () => `2026-08-11T12:00:0${sequence++}.000Z`,
 		createId: () => `proposal-${sequence}`,
-	});
+		...(options?.afterCandidateInstall
+			? { afterCandidateInstall: options.afterCandidateInstall }
+			: {}),
+	};
+	const ledger = new RefinementLedger(root, ledgerOptions);
 	return { ledger, root };
 }
 
@@ -60,12 +67,12 @@ afterEach(async () => {
 });
 
 describe("RefinementLedger", () => {
-	test("records attributable append-only lifecycle events", async () => {
+	test("records attributable lifecycle events and installs exact candidate bytes", async () => {
 		const { ledger, root } = await createLedger();
 		const proposal = await propose(ledger);
 		await ledger.validate(proposal.id, "evalfly:report-42");
 		await ledger.approve(proposal.id, "user:sebastian");
-		const active = await ledger.activate(proposal.id, BASE_HASH);
+		const active = await ledger.activate(proposal.id, CANDIDATE_BYTES);
 
 		expect(active).toMatchObject({
 			status: "active",
@@ -81,21 +88,40 @@ describe("RefinementLedger", () => {
 			.split("\n");
 		expect(lines).toHaveLength(4);
 		expect((await ledger.list())[0]).toEqual(active);
+		expect(
+			await readFile(join(root, "skills", "review", "SKILL.md"), "utf8"),
+		).toBe(CANDIDATE_CONTENT);
 	});
 
 	test("does not let validation approve or activation use stale content", async () => {
-		const { ledger } = await createLedger();
+		const { ledger, root } = await createLedger();
+		const artifactPath = join(root, "skills", "review", "SKILL.md");
 		const proposal = await propose(ledger);
 		const validated = await ledger.validate(proposal.id, "evalfly:report-42");
 
 		expect(validated.status).toBe("validated");
-		await expect(ledger.activate(proposal.id, BASE_HASH)).rejects.toThrow(
+		await expect(ledger.activate(proposal.id, CANDIDATE_BYTES)).rejects.toThrow(
 			"approved",
 		);
 		await ledger.approve(proposal.id, "user:sebastian");
+		await writeFile(artifactPath, "third-party edit\n");
+		await expect(ledger.activate(proposal.id, CANDIDATE_BYTES)).rejects.toThrow(
+			"base hash",
+		);
+		expect(await readFile(artifactPath, "utf8")).toBe("third-party edit\n");
+	});
+
+	test("rejects candidate bytes that do not match the proposed content hash", async () => {
+		const { ledger, root } = await createLedger();
+		const artifactPath = join(root, "skills", "review", "SKILL.md");
+		const proposal = await propose(ledger);
+		await ledger.validate(proposal.id, "evalfly:report-42");
+		await ledger.approve(proposal.id, "user:sebastian");
+
 		await expect(
-			ledger.activate(proposal.id, hashContent("changed\n")),
-		).rejects.toThrow("base hash");
+			ledger.activate(proposal.id, Buffer.from("wrong\n")),
+		).rejects.toThrow("candidate hash");
+		expect(await readFile(artifactPath, "utf8")).toBe(BASE_CONTENT);
 	});
 
 	test("prevents conflicting active proposals for one artifact", async () => {
@@ -103,12 +129,12 @@ describe("RefinementLedger", () => {
 		const first = await propose(ledger);
 		await ledger.validate(first.id, "evalfly:first");
 		await ledger.approve(first.id, "user:sebastian");
-		await ledger.activate(first.id, BASE_HASH);
+		await ledger.activate(first.id, CANDIDATE_BYTES);
 		const second = await propose(ledger);
 		await ledger.validate(second.id, "evalfly:second");
 		await ledger.approve(second.id, "user:sebastian");
 
-		await expect(ledger.activate(second.id, BASE_HASH)).rejects.toThrow(
+		await expect(ledger.activate(second.id, CANDIDATE_BYTES)).rejects.toThrow(
 			"active proposal",
 		);
 	});
@@ -123,8 +149,8 @@ describe("RefinementLedger", () => {
 		}
 
 		const results = await Promise.allSettled([
-			ledger.activate(first.id, BASE_HASH),
-			ledger.activate(second.id, BASE_HASH),
+			ledger.activate(first.id, CANDIDATE_BYTES),
+			ledger.activate(second.id, CANDIDATE_BYTES),
 		]);
 
 		expect(
@@ -138,6 +164,39 @@ describe("RefinementLedger", () => {
 		).toHaveLength(1);
 	});
 
+	test("recovers activation interrupted after install without losing rollback snapshot", async () => {
+		const interrupt = new Error("interrupt after candidate install");
+		const { ledger, root } = await createLedger({
+			afterCandidateInstall: () => {
+				throw interrupt;
+			},
+		});
+		const artifactPath = join(root, "skills", "review", "SKILL.md");
+		await chmod(artifactPath, 0o764);
+		const proposal = await propose(ledger);
+		await ledger.validate(proposal.id, "evalfly:report-42");
+		await ledger.approve(proposal.id, "user:sebastian");
+
+		await expect(ledger.activate(proposal.id, CANDIDATE_BYTES)).rejects.toBe(
+			interrupt,
+		);
+		expect(await readFile(artifactPath, "utf8")).toBe(CANDIDATE_CONTENT);
+		expect((await ledger.list())[0]?.status).toBe("approved");
+
+		const recoveredLedger = new RefinementLedger(root, {
+			now: () => "2026-08-11T12:00:09.000Z",
+		});
+		const active = await recoveredLedger.activate(proposal.id, CANDIDATE_BYTES);
+		expect(active.status).toBe("active");
+		const rolledBack = await recoveredLedger.rollback(
+			proposal.id,
+			"regression after recovery",
+		);
+		expect(rolledBack.status).toBe("rolled_back");
+		expect(await readFile(artifactPath, "utf8")).toBe(BASE_CONTENT);
+		expect((await stat(artifactPath)).mode & 0o777).toBe(0o764);
+	});
+
 	test("restores the snapshotted artifact on rollback", async () => {
 		const { ledger, root } = await createLedger();
 		const artifactPath = join(root, "skills", "review", "SKILL.md");
@@ -145,8 +204,7 @@ describe("RefinementLedger", () => {
 		const proposal = await propose(ledger);
 		await ledger.validate(proposal.id, "evalfly:report-42");
 		await ledger.approve(proposal.id, "user:sebastian");
-		await ledger.activate(proposal.id, BASE_HASH);
-		await writeFile(artifactPath, CANDIDATE_CONTENT);
+		await ledger.activate(proposal.id, CANDIDATE_BYTES);
 		await chmod(artifactPath, 0o600);
 		const rolledBack = await ledger.rollback(proposal.id, "regression");
 
@@ -179,8 +237,7 @@ describe("RefinementLedger", () => {
 		const proposal = await propose(ledger);
 		await ledger.validate(proposal.id, "evalfly:report-42");
 		await ledger.approve(proposal.id, "user:sebastian");
-		await ledger.activate(proposal.id, BASE_HASH);
-		await writeFile(artifactPath, BASE_CONTENT);
+		await ledger.activate(proposal.id, CANDIDATE_BYTES);
 		await chmod(artifactPath, 0o600);
 
 		const rolledBack = await ledger.rollback(proposal.id, "resume rollback");
@@ -196,7 +253,7 @@ describe("RefinementLedger", () => {
 		const proposal = await propose(ledger);
 		await ledger.validate(proposal.id, "evalfly:report-42");
 		await ledger.approve(proposal.id, "user:sebastian");
-		await ledger.activate(proposal.id, BASE_HASH);
+		await ledger.activate(proposal.id, CANDIDATE_BYTES);
 		await writeFile(artifactPath, "third-party edit\n");
 
 		await expect(ledger.rollback(proposal.id, "regression")).rejects.toThrow(

@@ -143,12 +143,18 @@ describe("CommandJournal", () => {
 		setNow("2026-08-11T12:00:02.000Z");
 		const takeover = await journal.claimNext("worker-b", 1_000);
 		expect(takeover).toMatchObject({ workerId: "worker-b", fencingToken: 2 });
+		if (takeover === null) throw new Error("Expected takeover claim");
 		await expect(
 			journal.acknowledge("command-1", "worker-a", 1, {
 				sessionId: "session-1",
 				persistedAt: "2026-08-11T12:00:02.000Z",
 			}),
 		).rejects.toBeInstanceOf(CommandJournalError);
+		await journal.markDispatched(
+			takeover.command.id,
+			"worker-b",
+			takeover.fencingToken,
+		);
 		const acknowledged = await journal.acknowledge("command-1", "worker-b", 2, {
 			sessionId: "session-1",
 			persistedAt: "2026-08-11T12:00:02.000Z",
@@ -171,17 +177,41 @@ describe("CommandJournal", () => {
 	});
 });
 
+test("never reclaims a command after durable dispatch", async () => {
+	const { journal, setNow } = await createJournal();
+	await journal.enqueue(command());
+	const claim = await journal.claimNext("worker-a", 1_000);
+	if (claim === null) throw new Error("Expected command claim");
+	await journal.markDispatched(
+		claim.command.id,
+		"worker-a",
+		claim.fencingToken,
+	);
+
+	setNow("2026-08-11T12:00:02.000Z");
+	expect(await journal.claimNext("worker-b", 1_000)).toBeNull();
+	expect(
+		await journal.fenceOrphanedDispatches("worker exited after dispatch"),
+	).toHaveLength(1);
+	expect((await journal.list())[0]).toMatchObject({
+		status: "uncertain",
+		lastError: "worker exited after dispatch",
+	});
+});
+
 describe("AutonomyWorker", () => {
 	test("journals a claim before execution and acknowledges after persistence", async () => {
 		const { journal, root } = await createJournal();
 		await journal.enqueue(command());
 		const observed: string[] = [];
 		const executor: CommandExecutor = {
-			async execute() {
-				const [record] = await journal.list();
-				observed.push(record?.status ?? "missing");
+			async execute(_command, _signal, onDispatched) {
+				const [claimed] = await journal.list();
+				observed.push(claimed?.status ?? "missing");
 				const raw = await readFile(join(root, "commands.jsonl"), "utf8");
 				expect(raw).toContain('"type":"claimed"');
+				await onDispatched();
+				observed.push((await journal.list())[0]?.status ?? "missing");
 				return {
 					sessionId: "session-1",
 					persistedAt: "2026-08-11T12:00:00.500Z",
@@ -197,10 +227,10 @@ describe("AutonomyWorker", () => {
 		});
 
 		expect(await worker.runOnce()).toBe(true);
-		expect(observed).toEqual(["claimed"]);
+		expect(observed).toEqual(["claimed", "dispatched"]);
 		expect((await journal.list())[0]?.status).toBe("acknowledged");
 		await worker.close();
-		expect(observed).toEqual(["claimed", "closed"]);
+		expect(observed).toEqual(["claimed", "dispatched", "closed"]);
 	});
 
 	test("exits before another claim when worker ownership changes", async () => {
@@ -230,7 +260,8 @@ describe("AutonomyWorker", () => {
 		const worker = new AutonomyWorker(
 			journal,
 			{
-				async execute() {
+				async execute(_command, _signal, onDispatched) {
+					await onDispatched();
 					executions += 1;
 					await owner.cancel();
 					await new AutonomyController(store, {
@@ -278,6 +309,11 @@ describe("AutonomyWorker", () => {
 		await journal.enqueue(command());
 		const claim = await journal.claimNext("worker-a", 5_000);
 		if (claim === null) throw new Error("Expected command claim");
+		await journal.markDispatched(
+			claim.command.id,
+			"worker-a",
+			claim.fencingToken,
+		);
 		await journal.acknowledge(
 			claim.command.id,
 			"worker-a",
@@ -406,13 +442,15 @@ describe("AutonomyWorker", () => {
 
 	test("renews leases while execution is active", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pantheon-agentd-heartbeat-"));
+		roots.push(root);
 		const journal = new CommandJournal(root, {
 			expectedRunId: "run-1",
 			expectedCwd: tmpdir(),
 		});
 		await journal.enqueue(command());
 		const executor: CommandExecutor = {
-			async execute() {
+			async execute(_command, _signal, onDispatched) {
+				await onDispatched();
 				await Bun.sleep(90);
 				return {
 					sessionId: "session-1",
@@ -458,7 +496,8 @@ describe("AutonomyWorker", () => {
 		const uncertainWorker = new AutonomyWorker(
 			uncertainFixture.journal,
 			{
-				async execute() {
+				async execute(_command, _signal, onDispatched) {
+					await onDispatched();
 					uncertainFixture.setNow("2026-08-11T12:01:00.000Z");
 					return {
 						sessionId: "session-1",

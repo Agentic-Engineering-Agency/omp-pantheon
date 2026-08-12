@@ -40,6 +40,9 @@ export class RefinementLedgerError extends Error {
 export interface RefinementLedgerOptions {
 	now?: () => string;
 	createId?: () => string;
+	afterCandidateInstall?: (
+		proposal: RefinementProposal,
+	) => Promise<void> | void;
 }
 
 export class RefinementLedger {
@@ -48,6 +51,9 @@ export class RefinementLedger {
 	private readonly quarantinePath: string;
 	private readonly now: () => string;
 	private readonly createId: () => string;
+	private readonly afterCandidateInstall?: (
+		proposal: RefinementProposal,
+	) => Promise<void> | void;
 
 	constructor(
 		private readonly root: string,
@@ -58,6 +64,7 @@ export class RefinementLedger {
 		this.quarantinePath = join(root, QUARANTINE_PATH);
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.createId = options.createId ?? randomUUID;
+		this.afterCandidateInstall = options.afterCandidateInstall;
 	}
 
 	async list(): Promise<RefinementProposal[]> {
@@ -153,12 +160,22 @@ export class RefinementLedger {
 		});
 	}
 
-	async activate(id: string, currentHash: string): Promise<RefinementProposal> {
+	async activate(
+		id: string,
+		candidateContent: string | Uint8Array,
+	): Promise<RefinementProposal> {
+		const candidate = Buffer.from(candidateContent);
 		return this.withLock(async () => {
 			const events = await this.readEvents();
 			const proposals = this.snapshot(events);
 			const proposal = this.requireProposal(proposals, id);
 			this.requireStatus(proposal, "approved", "activate");
+			const candidateHash = this.hashContent(candidate);
+			if (candidateHash !== proposal.contentHash) {
+				throw new RefinementLedgerError(
+					`Refinement candidate hash ${candidateHash} does not match proposed hash ${proposal.contentHash}`,
+				);
+			}
 			const conflict = proposals.find(
 				(item) =>
 					item.id !== id &&
@@ -176,17 +193,30 @@ export class RefinementLedger {
 				stat(artifactPath),
 			]);
 			const observedHash = this.hashContent(content);
-			if (proposal.baseHash !== currentHash || observedHash !== currentHash) {
-				throw new RefinementLedgerError(
-					`Refinement base hash ${proposal.baseHash} does not match current hash ${observedHash}`,
-				);
-			}
-			await this.writeSnapshot(proposal, content, metadata.mode & 0o777);
 			const next = {
 				...proposal,
 				status: "active" as const,
 				updatedAt: this.now(),
 			};
+			if (observedHash === proposal.contentHash) {
+				await this.readSnapshot(proposal);
+				await this.append(next, events.length + 1);
+				return next;
+			}
+			if (observedHash !== proposal.baseHash) {
+				throw new RefinementLedgerError(
+					`Refinement base hash ${proposal.baseHash} does not match current hash ${observedHash}`,
+				);
+			}
+			await this.writeSnapshot(proposal, content, metadata.mode & 0o777);
+			await this.installCandidate(
+				artifactPath,
+				proposal,
+				candidate,
+				metadata.mode & 0o777,
+				observedHash,
+			);
+			await this.afterCandidateInstall?.(proposal);
 			await this.append(next, events.length + 1);
 			return next;
 		});
@@ -415,6 +445,36 @@ export class RefinementLedger {
 			"checksum" in value &&
 			typeof value.checksum === "string"
 		);
+	}
+
+	private async installCandidate(
+		artifactPath: string,
+		proposal: RefinementProposal,
+		candidate: Uint8Array,
+		mode: number,
+		expectedCurrentHash: string,
+	): Promise<void> {
+		await assertNoSymlinkComponents(this.root, artifactPath);
+		const temporaryPath = `${artifactPath}.${proposal.id}.${randomUUID()}.candidate`;
+		await assertNoSymlinkComponents(this.root, temporaryPath);
+		try {
+			await writeFile(temporaryPath, candidate, {
+				flag: "wx",
+				mode,
+			});
+			await chmod(temporaryPath, mode);
+			await assertNoSymlinkComponents(this.root, artifactPath);
+			const currentHash = this.hashContent(await readFile(artifactPath));
+			if (currentHash !== expectedCurrentHash) {
+				throw new RefinementLedgerError(
+					`Cannot activate refinement ${proposal.id}: artifact changed during activation (${currentHash})`,
+				);
+			}
+			await assertNoSymlinkComponents(this.root, artifactPath);
+			await rename(temporaryPath, artifactPath);
+		} finally {
+			await rm(temporaryPath, { force: true });
+		}
 	}
 
 	private async restoreArtifact(

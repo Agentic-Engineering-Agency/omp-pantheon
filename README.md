@@ -123,7 +123,7 @@ Implemented and verified in this bundle:
 - optional GitHub Actions templates for advisory and required EvalFly checks;
 - bootstrap support for initializing project-local `evals/` with
   `--with-evalfly`;
-- root `evals/` dogfood suite in this repository with ten critical smoke cases;
+- root `evals/` dogfood suite in this repository with critical smoke cases;
 - tests covering EvalFly state, command parsing, stop-gate behavior, trace
   buffering, CLI behavior, and the dogfood eval repo;
 - `agentic-branch-e2e` as the real-user branch verification protocol.

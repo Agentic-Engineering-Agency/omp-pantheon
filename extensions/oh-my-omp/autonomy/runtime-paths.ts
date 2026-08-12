@@ -1,24 +1,13 @@
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { ensurePrivateDirectory } from "../private-files";
-import { privateProjectKey } from "../private-state";
-
-function resolvedStateHome(stateHome?: string): string {
-	return resolve(
-		stateHome ??
-			process.env.XDG_STATE_HOME ??
-			join(homedir(), ".local", "state"),
-	);
-}
+import {
+	preparePrivateProjectAreaRoot,
+	privateProjectAreaRoot,
+} from "../private-state";
 
 function autonomyProjectRoot(projectRoot: string, stateHome?: string): string {
-	return join(
-		resolvedStateHome(stateHome),
-		"omp-pantheon",
-		"autonomy",
-		privateProjectKey(projectRoot),
-	);
+	return privateProjectAreaRoot(projectRoot, "autonomy", stateHome);
 }
 
 export function autonomyProjectStateRoot(
@@ -43,12 +32,7 @@ async function prepareProjectHierarchy(
 	projectRoot: string,
 	stateHome?: string,
 ): Promise<void> {
-	const appRoot = join(resolvedStateHome(stateHome), "omp-pantheon");
-	const autonomyRoot = join(appRoot, "autonomy");
-	const projectRootPath = autonomyProjectRoot(projectRoot, stateHome);
-	for (const path of [appRoot, autonomyRoot, projectRootPath]) {
-		await ensurePrivateDirectory(path);
-	}
+	await preparePrivateProjectAreaRoot(projectRoot, "autonomy", stateHome);
 }
 
 export async function prepareAutonomyProjectStateRoot(

@@ -160,7 +160,8 @@ describe("PersistedScheduler", () => {
 		);
 		const executed: string[] = [];
 		const executor: CommandExecutor = {
-			async execute(work) {
+			async execute(work, _signal, onDispatched) {
+				await onDispatched();
 				executed.push(work.id);
 				return {
 					sessionId: "session-1",

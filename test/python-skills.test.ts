@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+	access,
 	chmod,
 	link,
 	mkdir,
@@ -291,6 +292,70 @@ describe("Python skill runner", () => {
 		expect(result.stderr).toBe("");
 	});
 
+	test("executes a staged entrypoint copy while preserving sibling imports and cleaning staging", async () => {
+		if (!pythonPath) throw new Error("python3 is required for this test");
+		const root = await createRoot();
+		await writeFile(join(root, "helper.py"), 'MESSAGE = "from sibling"\n');
+		await writeFile(
+			join(root, "main.py"),
+			[
+				"import helper, json, pathlib, sys",
+				"json.dump({",
+				'    "message": helper.MESSAGE,',
+				'    "stage": str(pathlib.Path(__file__).parent),',
+				"}, sys.stdout)",
+			].join("\n"),
+		);
+		const runner = new PythonSkillRunner({
+			provision: async () => ({ pythonPath, reused: true }),
+		});
+
+		const result = await runner.run(root, validManifest(), {
+			message: "hello",
+		});
+		const output = result.output as { message: string; stage: string };
+
+		expect(output.message).toBe("from sibling");
+		expect(output.stage).not.toBe(root);
+		expect(output.stage.startsWith(tmpdir())).toBe(true);
+		await expect(access(output.stage)).rejects.toThrow();
+	});
+
+	test("rejects an entrypoint replaced during provisioning without executing replacement code", async () => {
+		if (!pythonPath) throw new Error("python3 is required for this test");
+		const root = await createRoot();
+		const entrypoint = join(root, "main.py");
+		const marker = join(root, "replacement-ran");
+		await writeFile(
+			entrypoint,
+			'import json, sys\njson.dump({"message": "original"}, sys.stdout)\n',
+		);
+		const provisionEntered = Promise.withResolvers<void>();
+		const continueProvision = Promise.withResolvers<void>();
+		const runner = new PythonSkillRunner({
+			async provision() {
+				provisionEntered.resolve();
+				await continueProvision.promise;
+				return { pythonPath, reused: true };
+			},
+		});
+
+		const runPromise = runner.run(root, validManifest(), { message: "hello" });
+		await provisionEntered.promise;
+		await rm(entrypoint);
+		await writeFile(
+			entrypoint,
+			[
+				"import json, pathlib, sys",
+				`pathlib.Path(${JSON.stringify(marker)}).write_text("ran")`,
+				'json.dump({"message": "replacement"}, sys.stdout)',
+			].join("\n"),
+		);
+		continueProvision.resolve();
+		await expect(runPromise).rejects.toThrow("changed after provisioning");
+		await expect(access(marker)).rejects.toThrow();
+	});
+
 	test("serializes and validates input before provisioning or spawning", async () => {
 		const root = await createRoot();
 		await writeFile(join(root, "main.py"), 'print("{}")\n');
@@ -442,13 +507,20 @@ describe("Python skill runner", () => {
 			provision: async () => ({ pythonPath, reused: true }),
 		});
 		await mkdir(join(root, "nested"));
+		const stageMarker = join(root, "failed-stage-dir");
 		await writeFile(
 			join(root, "main.py"),
-			'import sys\nsys.stderr.write("broken")\nsys.exit(3)\n',
+			[
+				"import pathlib, sys",
+				`pathlib.Path(${JSON.stringify(stageMarker)}).write_text(str(pathlib.Path(__file__).parent))`,
+				'sys.stderr.write("broken")',
+				"sys.exit(3)",
+			].join("\n"),
 		);
 		await expect(
 			runner.run(root, validManifest(), { message: "hello" }),
 		).rejects.toThrow("exit code 3");
+		await expect(access(await readFile(stageMarker, "utf8"))).rejects.toThrow();
 
 		await writeFile(join(root, "main.py"), 'print("{}")\n');
 		await expect(

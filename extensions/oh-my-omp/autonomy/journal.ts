@@ -29,6 +29,7 @@ export interface CommandPersistenceReceipt {
 export type CommandStatus =
 	| "queued"
 	| "claimed"
+	| "dispatched"
 	| "acknowledged"
 	| "failed"
 	| "uncertain";
@@ -50,6 +51,7 @@ export interface CommandRecord {
 type CommandEventType =
 	| "enqueued"
 	| "claimed"
+	| "dispatched"
 	| "renewed"
 	| "acknowledged"
 	| "released"
@@ -179,6 +181,30 @@ export class CommandJournal {
 		});
 	}
 
+	async markDispatched(
+		commandId: string,
+		workerId: string,
+		fencingToken: number,
+	): Promise<CommandRecord> {
+		return this.#mutate(async (records, sequence) => {
+			const record = this.#requireActiveUndispatchedClaim(
+				records,
+				commandId,
+				workerId,
+				fencingToken,
+			);
+			await this.#append({
+				sequence,
+				at: this.#isoNow(),
+				type: "dispatched",
+				commandId,
+				workerId,
+				fencingToken,
+			});
+			return { ...record, status: "dispatched" };
+		});
+	}
+
 	async renewLease(
 		commandId: string,
 		workerId: string,
@@ -219,7 +245,7 @@ export class CommandJournal {
 	): Promise<CommandRecord> {
 		this.#assertReceipt(receipt);
 		return this.#mutate(async (records, sequence) => {
-			const record = this.#requireActiveClaim(
+			const record = this.#requireActiveDispatchedClaim(
 				records,
 				commandId,
 				workerId,
@@ -257,7 +283,7 @@ export class CommandJournal {
 			);
 		}
 		return this.#mutate(async (records, sequence) => {
-			const record = this.#requireClaim(
+			const record = this.#requireUndispatchedClaim(
 				records,
 				commandId,
 				workerId,
@@ -321,6 +347,42 @@ export class CommandJournal {
 				lastError: error.trim(),
 				uncertainAt,
 			};
+		});
+	}
+
+	async fenceOrphanedDispatches(error: string): Promise<CommandRecord[]> {
+		if (error.trim().length === 0) {
+			throw new CommandJournalError(
+				"Orphaned dispatch evidence must not be empty",
+			);
+		}
+		return this.#mutate(async (records, sequence) => {
+			const dispatched = [...records.values()].filter(
+				(record) => record.status === "dispatched",
+			);
+			const fenced: CommandRecord[] = [];
+			for (const record of dispatched) {
+				if (record.workerId === undefined) continue;
+				const uncertainAt = this.#isoNow();
+				await this.#append({
+					sequence: sequence + fenced.length,
+					at: uncertainAt,
+					type: "uncertain",
+					commandId: record.command.id,
+					workerId: record.workerId,
+					fencingToken: record.fencingToken,
+					error: error.trim(),
+				});
+				fenced.push({
+					...record,
+					status: "uncertain",
+					workerId: undefined,
+					leaseUntil: undefined,
+					lastError: error.trim(),
+					uncertainAt,
+				});
+			}
+			return fenced;
 		});
 	}
 
@@ -407,6 +469,16 @@ export class CommandJournal {
 			});
 			return;
 		}
+		if (event.type === "dispatched") {
+			if (record.status !== "claimed") {
+				throw new CommandJournalError(
+					`Invalid dispatch event for command ${event.commandId}`,
+				);
+			}
+			this.#assertEventClaim(record, event);
+			record.status = "dispatched";
+			return;
+		}
 		this.#assertEventClaim(record, event);
 		if (event.type === "renewed") {
 			if (!event.leaseUntil) {
@@ -418,6 +490,11 @@ export class CommandJournal {
 			return;
 		}
 		if (event.type === "released" || event.type === "failed") {
+			if (record.status !== "claimed") {
+				throw new CommandJournalError(
+					`Invalid retry event for dispatched command ${event.commandId}`,
+				);
+			}
 			Object.assign(record, {
 				status: event.type === "failed" ? "failed" : "queued",
 				workerId: undefined,
@@ -437,6 +514,11 @@ export class CommandJournal {
 			});
 			return;
 		}
+		if (record.status !== "dispatched") {
+			throw new CommandJournalError(
+				`Acknowledgement precedes dispatch for command ${event.commandId}`,
+			);
+		}
 		if (!event.receipt) {
 			throw new CommandJournalError(
 				`Acknowledgement for command ${event.commandId} lacks a receipt`,
@@ -454,7 +536,7 @@ export class CommandJournal {
 
 	#assertEventClaim(record: CommandRecord, event: CommandJournalEvent): void {
 		if (
-			record.status !== "claimed" ||
+			(record.status !== "claimed" && record.status !== "dispatched") ||
 			event.workerId !== record.workerId ||
 			event.fencingToken !== record.fencingToken
 		) {
@@ -473,12 +555,69 @@ export class CommandJournal {
 		const record = records.get(commandId);
 		if (
 			!record ||
-			record.status !== "claimed" ||
+			(record.status !== "claimed" && record.status !== "dispatched") ||
 			record.workerId !== workerId ||
 			record.fencingToken !== fencingToken
 		) {
 			throw new CommandJournalError(
 				`Worker ${workerId} holds a stale fencing token for command ${commandId}`,
+			);
+		}
+		return record;
+	}
+
+	#requireUndispatchedClaim(
+		records: Map<string, CommandRecord>,
+		commandId: string,
+		workerId: string,
+		fencingToken: number,
+	): CommandRecord {
+		const record = this.#requireClaim(
+			records,
+			commandId,
+			workerId,
+			fencingToken,
+		);
+		if (record.status !== "claimed") {
+			throw new CommandJournalError(
+				`Command ${commandId} was already dispatched and cannot be retried`,
+			);
+		}
+		return record;
+	}
+	#requireActiveUndispatchedClaim(
+		records: Map<string, CommandRecord>,
+		commandId: string,
+		workerId: string,
+		fencingToken: number,
+	): CommandRecord {
+		const record = this.#requireUndispatchedClaim(
+			records,
+			commandId,
+			workerId,
+			fencingToken,
+		);
+		if (!record.leaseUntil || Date.parse(record.leaseUntil) <= this.#now()) {
+			throw new CommandJournalError(`Lease expired for command ${commandId}`);
+		}
+		return record;
+	}
+
+	#requireActiveDispatchedClaim(
+		records: Map<string, CommandRecord>,
+		commandId: string,
+		workerId: string,
+		fencingToken: number,
+	): CommandRecord {
+		const record = this.#requireActiveClaim(
+			records,
+			commandId,
+			workerId,
+			fencingToken,
+		);
+		if (record.status !== "dispatched") {
+			throw new CommandJournalError(
+				`Command ${commandId} cannot be acknowledged before dispatch`,
 			);
 		}
 		return record;

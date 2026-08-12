@@ -527,6 +527,28 @@ export class AutonomyController {
 		});
 	}
 
+	async pauseWithError(
+		reason: string,
+		expectedRunId?: string,
+	): Promise<AutonomyRun> {
+		const state = await this.requireMutable(
+			"pause after bootstrap failure",
+			false,
+			expectedRunId,
+		);
+		if (reason.trim().length === 0) {
+			throw new AutonomyTransitionError(
+				"Autonomy pause failure reason must not be empty",
+			);
+		}
+		return this.persist({
+			...state,
+			status: "paused",
+			lastError: reason.trim(),
+			updatedAt: this.now(),
+		});
+	}
+
 	async resume(): Promise<AutonomyRun> {
 		const state = await this.requireState();
 		if (state.status !== "paused") {
@@ -537,6 +559,7 @@ export class AutonomyController {
 		return this.persist({
 			...state,
 			status: "running",
+			lastError: undefined,
 			updatedAt: this.now(),
 		});
 	}
