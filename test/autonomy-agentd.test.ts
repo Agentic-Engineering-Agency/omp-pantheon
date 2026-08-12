@@ -239,18 +239,12 @@ describe("AutonomyWorker", () => {
 		expect((await store.load())?.id).toBe("run-2");
 	});
 
-	test("finalizes resident success only after journal acknowledgement", async () => {
+	test("finalizes resident success from a journal acknowledgement", async () => {
 		const { journal } = await createJournal();
 		const { store } = await createPendingTerminalIntent();
 		await journal.enqueue(command());
 		const claim = await journal.claimNext("worker-a", 5_000);
 		if (claim === null) throw new Error("Expected command claim");
-
-		expect(await reconcileResidentTerminal("run-1", store, journal)).toBe(
-			false,
-		);
-		expect((await store.load())?.status).toBe("running");
-
 		await journal.acknowledge(
 			claim.command.id,
 			"worker-a",
@@ -260,8 +254,50 @@ describe("AutonomyWorker", () => {
 				persistedAt: "2026-08-11T12:00:00.500Z",
 			},
 		);
+
 		expect(await reconcileResidentTerminal("run-1", store, journal)).toBe(true);
 		expect((await store.load())?.status).toBe("succeeded");
+	});
+
+	test("does not replay an expired claimed command with terminal intent", async () => {
+		const { journal, setNow } = await createJournal();
+		const { store } = await createPendingTerminalIntent();
+		await journal.enqueue(command());
+		const claim = await journal.claimNext("worker-a", 5_000);
+		if (claim === null) throw new Error("Expected command claim");
+		setNow("2026-08-11T12:00:06.000Z");
+		let executions = 0;
+		const worker = new AutonomyWorker(
+			journal,
+			{
+				async execute() {
+					executions += 1;
+					return {
+						sessionId: "duplicate-session",
+						persistedAt: "2026-08-11T12:00:06.500Z",
+					};
+				},
+				async close() {},
+			},
+			{
+				workerId: "worker-b",
+				leaseMs: 5_000,
+				shouldStop: () => reconcileResidentTerminal("run-1", store, journal),
+			},
+		);
+
+		await worker.run(new AbortController().signal);
+
+		expect(executions).toBe(0);
+		expect((await journal.list())[0]).toMatchObject({
+			status: "uncertain",
+			lastError: "Resident worker exited before command acknowledgement",
+		});
+		expect(await store.load()).toMatchObject({
+			status: "failed",
+			lastError:
+				"Terminal transition persistence is uncertain: Resident worker exited before command acknowledgement",
+		});
 	});
 
 	test("fails a pending terminal transition when persistence is uncertain", async () => {

@@ -73,7 +73,7 @@ export async function reconcileResidentTerminal(
 	}
 	const intent = state.terminalIntent;
 	if (intent === undefined) return false;
-	const record = (await journal.list()).find(
+	let record = (await journal.list()).find(
 		(candidate) => candidate.command.id === intent.commandId,
 	);
 	const controller = new AutonomyController(store);
@@ -83,20 +83,21 @@ export async function reconcileResidentTerminal(
 			finalized.status,
 		);
 	}
-	if (
-		record === undefined ||
-		record.status === "failed" ||
-		record.status === "uncertain"
-	) {
-		await controller.failTerminalIntent(
-			intent.commandId,
-			record === undefined
-				? "Terminal transition command is missing from the journal"
-				: `Terminal transition persistence is ${record.status}: ${record.lastError ?? "no error recorded"}`,
+	if (record?.status === "claimed" && record.workerId !== undefined) {
+		record = await journal.markUncertain(
+			record.command.id,
+			record.workerId,
+			record.fencingToken,
+			"Resident worker exited before command acknowledgement",
 		);
-		return true;
 	}
-	return false;
+	await controller.failTerminalIntent(
+		intent.commandId,
+		record === undefined
+			? "Terminal transition command is missing from the journal"
+			: `Terminal transition persistence is ${record.status}: ${record.lastError ?? "command was not durably acknowledged"}`,
+	);
+	return true;
 }
 
 export class AutonomyAgentd {
