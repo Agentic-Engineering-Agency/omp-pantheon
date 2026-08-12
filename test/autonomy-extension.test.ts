@@ -1570,7 +1570,7 @@ describe("autonomy extension", () => {
 			"const fs = require('node:fs');",
 			`setTimeout(() => fs.writeFileSync(${JSON.stringify(marker)}, 'late'), 250);`,
 		].join("");
-		const verificationCommand = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(delayedWriter)} &`;
+		const verificationCommand = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(delayedWriter)} </dev/null >/dev/null 2>&1 & exit 0`;
 		const extension = await createFakeExtension(
 			(pi) =>
 				registerAutonomy(pi, undefined, {
