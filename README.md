@@ -27,6 +27,29 @@ engineering cockpit: one that can coordinate specialized agents, remember
 project context, require eval evidence for load-bearing work, verify real user
 flows, and make it harder for an agent to simply say “done” without proof.
 
+## Prime Agent-inspired verified autonomy
+
+Pantheon's autonomy layer adapts selected ideas from
+[Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)—long-running
+work, persistent goals, schedules, background continuity, continual harness
+refinement, and executable skills—into OMP-native, evidence-gated contracts:
+
+- `/autonomy` keeps durable objectives moving across process restarts with
+  persisted schedules, bounded retries, and completion gates that require
+  current command, EvalFly, or SpecSafe evidence rather than agent prose;
+- the broker-managed `pantheon-agentd` worker resumes file-backed OMP sessions
+  and uses leased, fenced command delivery to prevent stale workers from
+  advancing a run;
+- human-only `/refinement` and `/python-skill` flows keep reusable improvements
+  approval-gated, attributable, reversible, and isolated.
+
+This is an original TypeScript implementation against OMP's public SDK—not a
+port or redistribution of Prime Agent. No Prime Agent source code is copied or
+vendored. Prime Agent is MIT-licensed, copyright Mario Zechner and Prime
+Intellect. See [ATTRIBUTION.md](./ATTRIBUTION.md) for the precise lineage and
+[the autonomy guide](./docs/autonomy.md) for usage and current capability
+limits.
+
 ## What this repo contains
 
 `omp-pantheon` currently bundles:
