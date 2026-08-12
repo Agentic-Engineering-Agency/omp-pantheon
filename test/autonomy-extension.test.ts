@@ -442,6 +442,39 @@ describe("autonomy extension", () => {
 		expect(notifications.at(-1)).toContain("running");
 		expect(notifications.at(-1)).toContain("attempt 1/2");
 	});
+	test("rejects invalid explicit autonomy attempt limits", async () => {
+		for (const value of ["0", "-1", "abc", "1.5"]) {
+			let workerStarts = 0;
+			const extension = await createFakeExtension((pi) =>
+				registerAutonomy(pi, undefined, {
+					agentdFactory: () => ({
+						async start() {
+							workerStarts += 1;
+							return { state: "ready", restartCount: 0 };
+						},
+						async status() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async stop() {
+							return { state: "stopped", restartCount: 0 };
+						},
+						close() {},
+					}),
+				}),
+			);
+
+			await extension.commands.autonomy?.handler(
+				`start "Reject unsafe fallback" --max-attempts=${value}`,
+				extension.ctx,
+			);
+
+			expect(workerStarts).toBe(0);
+			expect(extension.notifications.at(-1)).toContain(
+				"max-attempts must be a positive integer",
+			);
+			expect(await new AutonomyStore(extension.ctx.cwd).load()).toBeNull();
+		}
+	});
 
 	test("rejects start without a persisted OMP session", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "pantheon-autonomy-no-session-"));
@@ -1080,12 +1113,14 @@ describe("autonomy extension", () => {
 		let resolveVerification:
 			| ((receipt: { status: "pass"; evidence: string }) => void)
 			| undefined;
+		const verifierEntered = Promise.withResolvers<void>();
 		const extension = await createFakeExtension(
 			(pi) =>
 				registerAutonomy(
 					pi,
 					{
 						async verify() {
+							verifierEntered.resolve();
 							return await new Promise((resolve) => {
 								resolveVerification = resolve;
 							});
@@ -1120,13 +1155,14 @@ describe("autonomy extension", () => {
 			undefined,
 			extension.ctx,
 		);
+		await verifierEntered.promise;
 		const store = new AutonomyStore(cwd, {
 			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
 		});
 		const controller = new AutonomyController(store);
 		const original = await controller.get();
 		if (original === null) throw new Error("Expected original run");
-		await controller.cancel(original.id);
+		await controller.cancel((await controller.get())?.id ?? original.id);
 		await new AutonomyController(store, {
 			createId: () => "replacement-verification-run",
 		}).start({
@@ -1289,12 +1325,119 @@ describe("autonomy extension", () => {
 		);
 		release.resolve();
 
-		await expect(verification).rejects.toThrow("expected attempt");
+		await expect(verification).rejects.toThrow("became stale");
 		const state = await new AutonomyStore(cwd, {
 			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
 		}).load();
-		expect(state?.artifactRevision).toBe(1);
+		expect(state?.artifactRevision).toBe(2);
 		expect(state?.gates.every((gate) => gate.status === "pending")).toBe(true);
+	});
+	test("invalidates a replacement run when an old verifier mutates late", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-verify-replaced-run-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-verify-replaced-run-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const sessionFile = join(cwd, "session.jsonl");
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(
+					pi,
+					{
+						async verify() {
+							entered.resolve();
+							await release.promise;
+							return {
+								status: "pass",
+								evidence: "command:late-mutation:exit:0",
+								artifactHash: "late-mutation",
+							};
+						},
+					},
+					{
+						stateHome,
+						agentdFactory: () => ({
+							async start() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async status() {
+								return { state: "ready", restartCount: 0 };
+							},
+							async stop() {
+								return { state: "stopped", restartCount: 0 };
+							},
+							close() {},
+						}),
+					},
+				),
+			{ cwd, sessionFile },
+		);
+		await extension.commands.autonomy?.handler(
+			'start "Old run" --max-attempts=2',
+			extension.ctx,
+		);
+		const verification = extension.tools.autonomy_gate?.execute(
+			"old-run-verification",
+			{},
+			undefined,
+			undefined,
+			extension.ctx,
+		);
+		await entered.promise;
+		const store = new AutonomyStore(cwd, {
+			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+		});
+		const controller = new AutonomyController(store, {
+			createId: () => "replacement-run",
+		});
+		const old = await controller.get();
+		if (old === null) throw new Error("Expected old autonomy run");
+		await controller.cancel(old.id);
+		const replacement = await controller.start({
+			task: "Replacement run",
+			maxAttempts: 2,
+			verificationCommand: "bun test",
+			ownerSessionFile: sessionFile,
+			gates: old.gates.map(({ id, label, requirement }) => ({
+				id,
+				label,
+				requirement,
+			})),
+		});
+		await controller.bindNativeGoal(
+			{ id: "replacement-goal", objective: replacement.task },
+			replacement.id,
+		);
+		const verificationGate = replacement.gates.find(
+			(gate) => gate.id === "verification",
+		);
+		if (verificationGate === undefined) {
+			throw new Error("Expected replacement verification gate");
+		}
+		await controller.recordGate(
+			{
+				gateId: verificationGate.id,
+				status: "pass",
+				evidence: "replacement:verification",
+				reporter: "host-verifier",
+				attempt: replacement.attempt,
+				artifactRevision: replacement.artifactRevision,
+			},
+			replacement.id,
+		);
+		release.resolve();
+
+		await expect(verification).rejects.toThrow("changed");
+		const current = await store.load();
+		expect(current).toMatchObject({
+			id: replacement.id,
+			artifactRevision: 1,
+		});
+		expect(current?.gates.every((gate) => gate.status === "pending")).toBe(
+			true,
+		);
 	});
 
 	test("invalidates evidence when verification changes untracked executable mode", async () => {
@@ -1550,6 +1693,85 @@ describe("autonomy extension", () => {
 		expect(
 			state?.gates.find((gate) => gate.id === "verification")?.status,
 		).toBe("pending");
+	});
+	test("aborted re-verification invalidates already-passing gates", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pantheon-aborted-reverify-"));
+		const stateHome = await mkdtemp(
+			join(tmpdir(), "pantheon-aborted-reverify-state-"),
+		);
+		roots.push(cwd, stateHome);
+		const initialize = Bun.spawn({
+			cmd: ["git", "init", "-b", "main"],
+			cwd,
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		expect(await initialize.exited).toBe(0);
+		const marker = join(cwd, "verification-started.txt");
+		const extension = await createFakeExtension(
+			(pi) =>
+				registerAutonomy(pi, undefined, {
+					stateHome,
+					agentdFactory: () => ({
+						async start() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async status() {
+							return { state: "ready", restartCount: 0 };
+						},
+						async stop() {
+							return { state: "stopped", restartCount: 0 };
+						},
+						close() {},
+					}),
+				}),
+			{ cwd, sessionFile: join(cwd, "session.jsonl") },
+		);
+		await extension.commands.autonomy?.handler(
+			`start "Abort re-verification" --max-attempts=2 --verify=${JSON.stringify("printf started > verification-started.txt; while true; do sleep 1; done")}`,
+			extension.ctx,
+		);
+		const store = new AutonomyStore(cwd, {
+			stateDirectory: autonomyProjectStateRoot(cwd, stateHome),
+		});
+		const controller = new AutonomyController(store);
+		const started = await controller.get();
+		if (started === null) throw new Error("Expected autonomy run");
+		await controller.bindNativeGoal(
+			{ id: "abort-goal", objective: started.task },
+			started.id,
+		);
+		for (const gate of started.gates) {
+			await controller.recordGate(
+				{
+					gateId: gate.id,
+					status: "pass",
+					evidence: `before-abort:${gate.id}`,
+					reporter:
+						gate.id === "native-goal" ? "native-goal-event" : "host-verifier",
+					attempt: started.attempt,
+					artifactRevision: started.artifactRevision,
+				},
+				started.id,
+			);
+		}
+		const abort = new AbortController();
+		const verification = extension.tools.autonomy_gate?.execute(
+			"aborted-reverification",
+			{},
+			abort.signal,
+			undefined,
+			extension.ctx,
+		);
+		await readTextWhenCreated(marker);
+		abort.abort();
+
+		await expect(verification).rejects.toMatchObject({ name: "AbortError" });
+		const current = await store.load();
+		expect(current?.artifactRevision).toBe(1);
+		expect(current?.gates.every((gate) => gate.status === "pending")).toBe(
+			true,
+		);
 	});
 
 	test("records passing EvalFly enforcement through a host gate adapter", async () => {

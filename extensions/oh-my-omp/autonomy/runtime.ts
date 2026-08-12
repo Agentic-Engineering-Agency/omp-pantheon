@@ -446,22 +446,55 @@ export class AutonomyRuntime {
 				"Cannot verify autonomy from a session that does not own the run",
 			);
 		}
-		const receipt = await this.verifier.verify(
-			this.cwd ?? "",
-			state.verificationCommand,
-			signal,
-		);
+		await controller.beginVerification(state.id, {
+			attempt: state.attempt,
+			artifactRevision: state.artifactRevision,
+		});
+		let receipt: VerificationReceipt;
+		try {
+			receipt = await this.verifier.verify(
+				this.cwd ?? "",
+				state.verificationCommand,
+				signal,
+			);
+		} catch (error) {
+			try {
+				await controller.recordCurrentArtifactRevision(
+					`verification-error:${createHash("sha256")
+						.update(
+							error instanceof Error
+								? `${error.name}:${error.message}`
+								: String(error),
+						)
+						.digest("hex")}`,
+				);
+			} catch (invalidationError) {
+				this.pi.logger.warn(
+					`Could not invalidate artifacts after verification error: ${
+						invalidationError instanceof Error
+							? invalidationError.message
+							: String(invalidationError)
+					}`,
+				);
+			}
+			throw error;
+		}
 		const evidenceState =
 			receipt.artifactHash === undefined
 				? state
-				: await controller.recordArtifactRevision(
+				: await controller.recordCurrentArtifactRevision(
 						`verification:${receipt.artifactHash}`,
-						state.id,
-						{
-							attempt: state.attempt,
-							artifactRevision: state.artifactRevision,
-						},
 					);
+		if (
+			evidenceState.id !== state.id ||
+			evidenceState.attempt !== state.attempt ||
+			evidenceState.artifactRevision !==
+				state.artifactRevision + (receipt.artifactHash === undefined ? 0 : 1)
+		) {
+			throw new AutonomyTransitionError(
+				"Verification result became stale after the current run changed",
+			);
+		}
 		return controller.recordGate(
 			{
 				gateId: "verification",

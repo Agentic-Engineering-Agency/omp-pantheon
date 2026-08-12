@@ -296,6 +296,47 @@ export class AutonomyController {
 		});
 	}
 
+	async beginVerification(
+		expectedRunId: string,
+		expected: { attempt: number; artifactRevision: number },
+	): Promise<AutonomyRun> {
+		return this.store.update(expectedRunId, (state) => {
+			this.assertMutableState(
+				state,
+				"begin verification",
+				false,
+				expectedRunId,
+			);
+			if (
+				state.attempt !== expected.attempt ||
+				state.artifactRevision !== expected.artifactRevision
+			) {
+				throw new AutonomyTransitionError(
+					`Cannot begin verification: expected attempt ${expected.attempt} artifact revision ${expected.artifactRevision}, found attempt ${state.attempt} artifact revision ${state.artifactRevision}`,
+				);
+			}
+			const gateIndex = state.gates.findIndex(
+				(gate) => gate.id === "verification",
+			);
+			if (gateIndex < 0) {
+				throw new AutonomyTransitionError(
+					"Autonomy verification gate is not configured",
+				);
+			}
+			const timestamp = this.now();
+			return {
+				...state,
+				revision: state.revision + 1,
+				gates: state.gates.map((gate, index) =>
+					index === gateIndex
+						? resetGate(gate, state.attempt, state.artifactRevision)
+						: gate,
+				),
+				updatedAt: timestamp,
+			};
+		});
+	}
+
 	async recordArtifactRevision(
 		artifactHash: string,
 		expectedRunId?: string,
@@ -322,6 +363,35 @@ export class AutonomyController {
 					`Cannot record an artifact revision: expected attempt ${expected.attempt} artifact revision ${expected.artifactRevision}, found attempt ${state.attempt} artifact revision ${state.artifactRevision}`,
 				);
 			}
+			const timestamp = this.now();
+			const artifactRevision = state.artifactRevision + 1;
+			return {
+				...state,
+				status: state.status === "paused" ? "paused" : "running",
+				revision: state.revision + 1,
+				artifactRevision,
+				artifactHash: normalizedHash,
+				gates: state.gates.map((gate) =>
+					resetGate(gate, state.attempt, artifactRevision),
+				),
+				updatedAt: timestamp,
+			};
+		});
+	}
+	async recordCurrentArtifactRevision(
+		artifactHash: string,
+	): Promise<AutonomyRun> {
+		const normalizedHash = artifactHash.trim();
+		if (normalizedHash.length === 0) {
+			throw new AutonomyTransitionError("Artifact hash must not be empty");
+		}
+		return this.store.updateCurrent((state) => {
+			this.assertMutableState(
+				state,
+				"record an artifact revision",
+				false,
+				state.id,
+			);
 			const timestamp = this.now();
 			const artifactRevision = state.artifactRevision + 1;
 			return {

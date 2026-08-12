@@ -7,6 +7,7 @@ interface ParsedAutonomyCommand {
 	task?: string;
 	maxAttempts?: number;
 	verificationCommand?: string;
+	invalidMaxAttempts?: boolean;
 }
 
 function parseAutonomyCommand(raw: string): ParsedAutonomyCommand | null {
@@ -45,7 +46,9 @@ function parseAutonomyCommand(raw: string): ParsedAutonomyCommand | null {
 	for (const token of tokens) {
 		if (token.startsWith("--max-attempts=")) {
 			const maxAttempts = Number(token.slice("--max-attempts=".length));
-			if (Number.isInteger(maxAttempts) && maxAttempts > 0) {
+			if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+				parsed.invalidMaxAttempts = true;
+			} else {
 				parsed.maxAttempts = maxAttempts;
 			}
 			continue;
@@ -78,6 +81,13 @@ export function registerAutonomyCommands(
 					case "start": {
 						if (!parsed.task) {
 							ctx.ui.notify("/autonomy start requires a task", "error");
+							return;
+						}
+						if (parsed.invalidMaxAttempts === true) {
+							ctx.ui.notify(
+								"/autonomy max-attempts must be a positive integer",
+								"error",
+							);
 							return;
 						}
 						const state = await runtime.start(

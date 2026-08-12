@@ -138,6 +138,29 @@ export class AutonomyStore {
 			await release();
 		}
 	}
+	async updateCurrent(change: AutonomyStateUpdate): Promise<AutonomyRun> {
+		await this.assertSafeStatePath();
+		const directory = dirname(this.statePath);
+		await ensurePrivateDirectory(directory);
+		const release = await acquireFileLock(this.lockPath);
+		try {
+			const current = await this.load();
+			if (current === null) {
+				throw new AutonomyStoreError("No autonomy run exists");
+			}
+			const next = change(current);
+			if (next.id !== current.id || next.revision !== current.revision + 1) {
+				throw new AutonomyStoreError(
+					"Atomic autonomy update must preserve the current run and advance one revision",
+				);
+			}
+			this.assertState(next, "state");
+			await this.writeLocked(next);
+			return next;
+		} finally {
+			await release();
+		}
+	}
 
 	private async writeLocked(state: AutonomyRun): Promise<void> {
 		const eventWithoutChecksum = {
