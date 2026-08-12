@@ -45,11 +45,12 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
   identities. The old worker exits before another claim on terminal state,
   missing state, or run ownership loss. External runtimes reload final state
   across process boundaries.
-- Bound each persisted objective to its canonical OMP owner session. Goal, tool,
-  verification, and `agent_end` events from another session in the same project
-  cannot mutate its gates, consume attempts, or redirect its durable
-  continuation. Delayed evidence and terminal transitions also carry the
-  captured run ID, so replacement runs reject stale receipts.
+- Bound each persisted objective to its canonical OMP owner session. Positive
+  goal/verification evidence and `agent_end` attempt/continuation decisions from
+  another session in the same project cannot advance it. Mutating tool results
+  remain project-wide invalidation signals and reset gates from any session.
+  Delayed evidence and terminal transitions also carry the captured run ID, so
+  replacement runs reject stale receipts.
 - Added approval-gated refinement and isolated Python skill contracts.
 - Added capability adapters for JSON-only kernel checkpoints and retained
   subagents. Both report unsupported on stock OMP 17.2.14 because the required

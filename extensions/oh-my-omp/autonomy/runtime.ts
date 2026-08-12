@@ -334,7 +334,6 @@ export class AutonomyRuntime {
 		) {
 			return;
 		}
-		if (!this.ownsRunSession(state)) return;
 		if (state.terminalIntent !== undefined) {
 			await controller.failTerminalIntent(
 				state.terminalIntent.commandId,

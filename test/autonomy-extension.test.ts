@@ -363,6 +363,8 @@ describe("autonomy extension", () => {
 			},
 			other.ctx,
 		);
+		expect(await store.load()).toEqual(before);
+
 		await other.handlers.tool_result?.[0]?.(
 			{
 				toolCallId: "other-write",
@@ -383,14 +385,22 @@ describe("autonomy extension", () => {
 			),
 		).rejects.toThrow("does not own");
 
-		expect(await store.load()).toEqual(before);
+		const invalidated = await store.load();
+		expect(invalidated).toMatchObject({
+			attempt: before.attempt,
+			artifactRevision: before.artifactRevision + 1,
+		});
+		expect(invalidated?.gates.every((gate) => gate.status === "pending")).toBe(
+			true,
+		);
 
+		const invalidatedAttempt = invalidated?.attempt;
 		await owner.handlers.agent_end?.[0]?.({ messages: [] }, owner.ctx);
 		const advanced = await store.load();
 		if (advanced === null) throw new Error("Expected advanced autonomy run");
 		expect(advanced).toMatchObject({
 			ownerSessionFile: ownerSession,
-			attempt: 2,
+			attempt: (invalidatedAttempt ?? 1) + 1,
 		});
 		const root = autonomyRuntimeRoot(cwd, advanced.id, stateHome);
 		const commandJournal = new CommandJournal(root, {
