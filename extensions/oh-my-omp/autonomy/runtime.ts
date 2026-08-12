@@ -180,20 +180,22 @@ export class AutonomyRuntime {
 			throw new AutonomyTransitionError("No autonomy run exists");
 		}
 		if (ACTIVE_STATUSES[state.status] !== true && state.status !== "paused") {
-			return controller.pause();
+			return controller.pause(state.id);
 		}
 		if (await this.requestResidentTerminal(controller, state.id, "paused")) {
 			return (await controller.get()) ?? state;
 		}
 		await this.stopAgentdAndRequireTerminal(state.id);
-		const reconciled = await this.reconcilePendingTerminalAfterStop(state);
+		const stoppedState = await this.requireRun(controller, state.id, "pause");
+		const reconciled =
+			await this.reconcilePendingTerminalAfterStop(stoppedState);
 		if (reconciled !== null) {
 			if (reconciled.status === "paused") return reconciled;
 			throw new AutonomyTransitionError(
 				`Pending terminal transition resolved as ${reconciled.status}; pause was not applied`,
 			);
 		}
-		return controller.pause();
+		return controller.pause(state.id);
 	}
 
 	async resume(): Promise<AutonomyRun> {
@@ -218,14 +220,16 @@ export class AutonomyRuntime {
 			return (await controller.get()) ?? state;
 		}
 		await this.stopAgentdAndRequireTerminal(state.id);
-		const reconciled = await this.reconcilePendingTerminalAfterStop(state);
+		const stoppedState = await this.requireRun(controller, state.id, "cancel");
+		const reconciled =
+			await this.reconcilePendingTerminalAfterStop(stoppedState);
 		if (reconciled !== null) {
 			if (reconciled.status === "cancelled") return reconciled;
 			throw new AutonomyTransitionError(
 				`Pending terminal transition resolved as ${reconciled.status}; cancellation was not applied`,
 			);
 		}
-		return controller.cancel();
+		return controller.cancel(state.id);
 	}
 
 	async runVerification(signal?: AbortSignal): Promise<AutonomyRun> {
@@ -503,18 +507,36 @@ export class AutonomyRuntime {
 			expectedCwd: this.cwd,
 		});
 		await reconcileResidentTerminal(state.id, this.store, journal);
-		const reconciled = await (await this.requireController()).get();
-		if (reconciled === null) {
-			throw new AutonomyTransitionError(
-				"Autonomy state disappeared during terminal reconciliation",
-			);
-		}
+		const reconciled = await this.requireRun(
+			await this.requireController(),
+			state.id,
+			"reconcile a terminal transition",
+		);
 		if (reconciled.terminalIntent !== undefined) {
 			throw new AutonomyTransitionError(
 				`Terminal transition for command ${reconciled.terminalIntent.commandId} remains unresolved`,
 			);
 		}
 		return ACTIVE_STATUSES[reconciled.status] === true ? null : reconciled;
+	}
+
+	private async requireRun(
+		controller: AutonomyController,
+		expectedRunId: string,
+		action: string,
+	): Promise<AutonomyRun> {
+		const state = await controller.get();
+		if (state === null) {
+			throw new AutonomyTransitionError(
+				`Autonomy run disappeared while attempting to ${action}`,
+			);
+		}
+		if (state.id !== expectedRunId) {
+			throw new AutonomyTransitionError(
+				`Autonomy run changed from ${expectedRunId} to ${state.id} while attempting to ${action}`,
+			);
+		}
+		return state;
 	}
 
 	private async stopAgentdAndRequireTerminal(runId: string): Promise<void> {

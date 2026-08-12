@@ -465,8 +465,8 @@ export class AutonomyController {
 		};
 	}
 
-	async pause(): Promise<AutonomyRun> {
-		const state = await this.requireMutable("pause");
+	async pause(expectedRunId?: string): Promise<AutonomyRun> {
+		const state = await this.requireMutable("pause", false, expectedRunId);
 		if (state.status === "paused") return state;
 		return this.persist({
 			...state,
@@ -489,8 +489,8 @@ export class AutonomyController {
 		});
 	}
 
-	async cancel(): Promise<AutonomyRun> {
-		const state = await this.requireMutable("cancel");
+	async cancel(expectedRunId?: string): Promise<AutonomyRun> {
+		const state = await this.requireMutable("cancel", false, expectedRunId);
 		return this.persist({
 			...state,
 			status: "cancelled",
@@ -509,8 +509,14 @@ export class AutonomyController {
 	private async requireMutable(
 		action: string,
 		allowTerminalIntent = false,
+		expectedRunId?: string,
 	): Promise<AutonomyRun> {
 		const state = await this.requireState();
+		if (expectedRunId !== undefined && state.id !== expectedRunId) {
+			throw new AutonomyTransitionError(
+				`Cannot ${action}: autonomy run changed from ${expectedRunId} to ${state.id}`,
+			);
+		}
 		if (TERMINAL_STATUSES[state.status] === true) {
 			throw new AutonomyTransitionError(
 				`Cannot ${action}: autonomy run is ${state.status}`,

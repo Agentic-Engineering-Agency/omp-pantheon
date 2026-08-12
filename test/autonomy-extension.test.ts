@@ -1344,6 +1344,7 @@ describe("autonomy extension", () => {
 			);
 			roots.push(cwd, stateHome);
 			let stops = 0;
+			let onStop: (() => Promise<void>) | undefined;
 			const sessionFile = join(cwd, "session.jsonl");
 			const extension = await createFakeExtension(
 				(pi) =>
@@ -1368,6 +1369,7 @@ describe("autonomy extension", () => {
 								},
 								async stop() {
 									stops += 1;
+									await onStop?.();
 									return { state: "stopped", restartCount: 0 };
 								},
 								close() {},
@@ -1406,6 +1408,9 @@ describe("autonomy extension", () => {
 				extension,
 				journal,
 				stateHome,
+				setStopAction(action: () => Promise<void>) {
+					onStop = action;
+				},
 				stopCalls: () => stops,
 				store,
 				workerCommand,
@@ -1448,6 +1453,71 @@ describe("autonomy extension", () => {
 		expect(cancel.stopCalls()).toBe(1);
 		expect(cancel.extension.notifications.at(-1)).toContain(
 			"cancellation was not applied",
+		);
+
+		const lateIntent = await createExternalExtension(
+			"external-late-intent",
+			"Reconcile intent created during stop",
+		);
+		await lateIntent.journal.enqueue(
+			lateIntent.workerCommand("late-intent-command"),
+		);
+		lateIntent.setStopAction(async () => {
+			await lateIntent.controller.requestTerminalIntent(
+				"cancelled",
+				"late-intent-command",
+			);
+		});
+		await lateIntent.extension.commands.autonomy?.handler(
+			"pause",
+			lateIntent.extension.ctx,
+		);
+		expect(await lateIntent.store.load()).toMatchObject({
+			status: "failed",
+			lastError:
+				"Terminal transition persistence is queued: command was not durably acknowledged",
+		});
+		expect((await lateIntent.store.load())?.terminalIntent).toBeUndefined();
+		expect(lateIntent.stopCalls()).toBe(1);
+		expect(lateIntent.extension.notifications.at(-1)).toContain(
+			"Pending terminal transition resolved as failed",
+		);
+
+		const replacement = await createExternalExtension(
+			"external-replacement-run",
+			"Fence replacement run",
+		);
+		replacement.setStopAction(async () => {
+			await replacement.controller.cancel();
+			await new AutonomyController(replacement.store, {
+				createId: () => "replacement-run",
+			}).start({
+				task: "Replacement run",
+				maxAttempts: 2,
+				verificationCommand: "bun test",
+				gates: [
+					{
+						id: "native-goal",
+						label: "OMP native goal",
+						requirement: { kind: "native-goal" },
+					},
+				],
+			});
+		});
+		await replacement.extension.commands.autonomy?.handler(
+			"pause",
+			replacement.extension.ctx,
+		);
+		expect(await replacement.store.load()).toMatchObject({
+			id: "replacement-run",
+			status: "running",
+		});
+		expect(replacement.stopCalls()).toBe(1);
+		expect(replacement.extension.notifications.at(-1)).toContain(
+			"Autonomy run changed",
+		);
+		expect(replacement.extension.notifications).not.toContain(
+			"info:Autonomy paused.",
 		);
 
 		const success = await createExternalExtension(

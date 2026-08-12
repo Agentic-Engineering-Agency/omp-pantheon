@@ -135,6 +135,27 @@ describe("AutonomyController", () => {
 		expect((await controller.get())?.status).toBe("paused");
 	});
 
+	test("scopes external pause and cancellation to the expected run", async () => {
+		const { controller, store } = await createHarness();
+		const original = await startRun(controller);
+		await controller.cancel();
+		const replacementController = new AutonomyController(store, {
+			createId: () => "run-2",
+		});
+		await startRun(replacementController);
+
+		await expect(controller.pause(original.id)).rejects.toThrow(
+			"autonomy run changed",
+		);
+		await expect(controller.cancel(original.id)).rejects.toThrow(
+			"autonomy run changed",
+		);
+		expect(await store.load()).toMatchObject({
+			id: "run-2",
+			status: "running",
+		});
+	});
+
 	test("requires every gate to pass for the current attempt and artifact", async () => {
 		const { controller } = await createHarness();
 		await startRun(controller);
