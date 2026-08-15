@@ -127,7 +127,9 @@ Implemented and verified in this bundle:
 - root `evals/` dogfood suite in this repository with critical smoke cases;
 - tests covering EvalFly state, command parsing, stop-gate behavior, trace
   buffering, CLI behavior, and the dogfood eval repo;
-- `agentic-branch-e2e` as the real-user branch verification protocol.
+- `agentic-branch-e2e` as the real-user branch verification protocol;
+- opt-in ADHD-friendly output mode via `/i-have-adhd`, `--adhd`, or an
+  agent-local `.i-have-adhd-always` sentinel;
 - opt-in `/autonomy` commands and the `autonomy_gate` tool;
 - durable autonomy state, command queue, persisted scheduler generations,
   lease/fencing recovery, and broker-managed `pantheon-agentd`;
@@ -197,6 +199,7 @@ skills/evalfly/          EvalFly templates, CLI, and adoption docs
 evals/                  This repo's dogfood EvalFly smoke suite
 hooks/*.ts              OMP lifecycle hooks from Seshat/SpecSafe
 extensions/oh-my-omp/   verified autonomy, EvalFly, Honcho, lifecycle hooks
+extensions/i-have-adhd/ opt-in session-persistent ADHD-friendly output mode
 test/                   integration/regression tests for the bundle
 docs/                   public overview, EvalFly guides, plans, port notes
 package.json            root test/typecheck/format/lint runner
