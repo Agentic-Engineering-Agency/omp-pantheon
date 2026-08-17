@@ -40,7 +40,7 @@ the Seshat/SpecSafe runtime into the local harness.
 
 ### Skills (`~/.omp/agent/skills/`)
 - Pantheon: `ai-slop-remover`, `dev-browser`, `frontend-ui-ux`, `git-master`,
-  `hyperplan`, `playwright`, `playwright-cli`, `remove-deadcode`,
+  `hyperplan`, `i-have-adhd`, `playwright`, `playwright-cli`, `remove-deadcode`,
   `review-work`, `security-research`, `tech-debt-audit`.
 - Seshat/SpecSafe: `bootstrap`, `coherence`, `docs`, `env-doctor`,
   `evaluation-flywheel`, `github`, `latest-docs`, `linear`, `push`, `specsafe`.
