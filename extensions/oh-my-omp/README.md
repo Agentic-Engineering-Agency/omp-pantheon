@@ -21,6 +21,9 @@ the Seshat/SpecSafe runtime into the local harness.
 - Registers `/autonomy` and the parameterless `autonomy_gate` verification
   tool. See [`docs/autonomy.md`](../../docs/autonomy.md) for lifecycle, state,
   security boundaries, and migration details.
+- Registers `refinement_preview`: agents prepare a session-scoped JSON
+  transaction from a candidate file, while only the interactive user input
+  `aprobar` records and activates the refinement.
 - Registers lifecycle guardrails: `todo-enforcer`, `comment-checker`, and
   `intent-gate`.
 
@@ -40,8 +43,9 @@ the Seshat/SpecSafe runtime into the local harness.
 
 ### Skills (`~/.omp/agent/skills/`)
 - Pantheon: `ai-slop-remover`, `dev-browser`, `frontend-ui-ux`, `git-master`,
-  `hyperplan`, `i-have-adhd`, `playwright`, `playwright-cli`, `remove-deadcode`,
-  `review-work`, `security-research`, `tech-debt-audit`.
+  `hyperplan`, `i-have-adhd`, `natural-refinement`, `playwright`,
+  `playwright-cli`, `remove-deadcode`, `review-work`, `security-research`,
+  `tech-debt-audit`.
 - Seshat/SpecSafe: `bootstrap`, `coherence`, `docs`, `env-doctor`,
   `evaluation-flywheel`, `github`, `latest-docs`, `linear`, `push`, `specsafe`.
 - EvalFly: opt-in templates and CLI under `skills/evalfly/` for deterministic
