@@ -291,7 +291,7 @@ describe("autonomy extension", () => {
 			"refinement",
 			"python-skill",
 		]);
-		expect(Object.keys(tools)).toEqual(["autonomy_gate"]);
+		expect(Object.keys(tools)).toEqual(["autonomy_gate", "refinement_preview"]);
 	});
 
 	test("entrypoint exposes human refinement proposal and lifecycle commands", async () => {
