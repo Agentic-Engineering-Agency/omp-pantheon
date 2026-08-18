@@ -20,6 +20,7 @@ import { registerIntentGate } from "./hooks/intent-gate";
 import { registerTodoEnforcer } from "./hooks/todo-enforcer";
 import { registerPythonSkillCommand } from "./python-skills/commands";
 import { registerRefinementCommand } from "./refinement/commands";
+import { registerNaturalRefinement } from "./refinement/natural";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SKILLS_DIR = path.resolve(HERE, "../../skills");
@@ -44,6 +45,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	// Verified autonomy: no state means no autonomous behavior.
 	registerAutonomy(pi);
 	registerRefinementCommand(pi);
+	registerNaturalRefinement(pi);
 	registerPythonSkillCommand(pi);
 
 	// Lifecycle hooks: advisory context plus discipline enforcement.
