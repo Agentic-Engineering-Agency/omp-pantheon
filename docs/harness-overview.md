@@ -56,7 +56,7 @@ The target failure modes are:
 | CI enforcement | Reject PRs without EvalFly check evidence. | Template exists; consuming repos must install workflow and branch protection. |
 | Branch E2E | Verify real user behavior through UI/backend/log/network evidence and negative cases. | Implemented as `agentic-branch-e2e` skill/protocol; not yet automatically imported into EvalFly. |
 | Verified autonomy | Keep an objective running across agent/process boundaries without trusting completion prose. | Implemented as opt-in `/autonomy`, core native-goal and targeted-command gates, conditional exact EvalFly/SpecSafe adapters, durable journals, scheduler generations, and broker-managed `pantheon-agentd`. |
-| Refinement | Validate and approve proposed harness changes before activation. | Implemented as an append-only checksummed ledger with conflict, quarantine, and rollback states. |
+| Refinement | Validate and approve proposed harness changes before activation. | Agents can prepare a session-scoped JSON preview from natural language, but only interactive `aprobar` activates the exact reviewed candidate; the append-only ledger retains conflict, quarantine, and rollback states. |
 | Python skills | Run skill-local Python with reproducible dependencies and explicit bounds. | Implemented with exact pins, content-addressed virtual environments, JSON contracts, and fail-closed network denial. |
 
 ## The intended issue flow
