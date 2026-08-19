@@ -1,14 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { parseSkillCatalog } from "../extensions/oh-my-omp/skill-routing/catalog";
-import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import {
 	type RouteSkillsDependencies,
+	type SkillRoutingDecision,
 	routeSkills,
 } from "../extensions/oh-my-omp/skill-routing/router";
 import {
-	registerSkillRouting,
 	type SkillRoutingRuntimeOptions,
+	registerSkillRouting,
 } from "../extensions/oh-my-omp/skill-routing/runtime";
 
 const SYSTEM_PROMPT = [
@@ -141,6 +142,38 @@ describe("skill routing", () => {
 		});
 	});
 
+	test("supplies the complete mandatory selection policy", async () => {
+		let instruction = "";
+		let temperature: number | undefined;
+		await routeSkills(
+			input(),
+			dependencies('{"skills":[],"confidence":"certain"}', {
+				complete: async (_model, context, options) => {
+					instruction = (context.systemPrompt ?? []).join("\n");
+					temperature = options.temperature;
+					return response('{"skills":[],"confidence":"certain"}');
+				},
+			}),
+		);
+
+		expect(instruction).toContain(
+			"Select every triggered skill, including mandatory process skills.",
+		);
+		expect(instruction).toContain(
+			"A skill is triggered whenever its catalog description says to use or load it for the request.",
+		);
+		expect(instruction).toContain(
+			"Do not select skills merely because they are generally useful.",
+		);
+		expect(instruction).toContain(
+			"Return an empty skills list only when no catalog skill applies.",
+		);
+		expect(instruction).toContain(
+			"A request without a concrete object or goal is ambiguous; return uncertain.",
+		);
+		expect(temperature).toBe(0);
+	});
+
 	test("accepts a certain empty selection", async () => {
 		const decision = await routeSkills(
 			input(),
@@ -238,10 +271,10 @@ interface RoutingEvent {
 	systemPrompt: string[];
 }
 
-type BeforeAgentStartResult = { systemPrompt?: string[] } | undefined | void;
+type BeforeAgentStartResult = { systemPrompt?: string[] } | undefined;
 
 function createRoutingHarness(
-	decisions: Awaited<ReturnType<SkillRoutingRuntimeOptions["route"]>>[],
+	decisions: Array<SkillRoutingDecision | Promise<SkillRoutingDecision>>,
 ) {
 	const handlers: Record<
 		string,
@@ -296,7 +329,12 @@ function createRoutingHarness(
 		if (!handler) throw new Error("session_shutdown handler missing");
 		await handler({ prompt: "", systemPrompt: [] }, ctx);
 	};
-	return { beforeAgentStart, handlers, logs, shutdown };
+	const resetSession = async (event: "session_branch" | "session_switch") => {
+		const handler = handlers[event]?.[0];
+		if (!handler) throw new Error(`${event} handler missing`);
+		await handler({ prompt: "", systemPrompt: [] }, ctx);
+	};
+	return { beforeAgentStart, handlers, logs, resetSession, shutdown };
 }
 
 describe("skill routing runtime", () => {
@@ -361,6 +399,44 @@ describe("skill routing runtime", () => {
 		expect(result?.systemPrompt).toBe(malformed);
 	});
 
+	test("returns the exact original prompt when routing throws", async () => {
+		const runtime = createRoutingHarness([
+			Promise.reject(new Error("unexpected router failure")),
+		]);
+		const event = { prompt: "debug", systemPrompt: SYSTEM_PROMPT };
+
+		const result = await runtime.beforeAgentStart(event);
+
+		expect(result?.systemPrompt).toBe(SYSTEM_PROMPT);
+		expect(runtime.logs.at(-1)?.metadata).toEqual({
+			reason: "router-error",
+			catalogCount: 3,
+			selectedCount: 0,
+		});
+	});
+
+	test("discards an in-flight decision after the session changes", async () => {
+		const pending = Promise.withResolvers<SkillRoutingDecision>();
+		const runtime = createRoutingHarness([
+			pending.promise,
+			{ kind: "selected", names: ["git-master"] },
+		]);
+		const staleEvent = { prompt: "debug", systemPrompt: SYSTEM_PROMPT };
+		const staleResultPromise = runtime.beforeAgentStart(staleEvent);
+
+		await runtime.resetSession("session_switch");
+		pending.resolve({ kind: "selected", names: ["diagnose"] });
+		const staleResult = await staleResultPromise;
+		const nextResult = await runtime.beforeAgentStart({
+			prompt: "commit",
+			systemPrompt: SYSTEM_PROMPT,
+		});
+
+		expect(staleResult?.systemPrompt).toBe(SYSTEM_PROMPT);
+		expect(nextResult?.systemPrompt?.[0]).not.toContain("- diagnose:");
+		expect(nextResult?.systemPrompt?.[0]).toContain("- git-master:");
+	});
+
 	test("logs fallback metadata without sensitive routing content", async () => {
 		const runtime = createRoutingHarness([
 			{ kind: "fallback", reason: "provider-error" },
@@ -405,5 +481,71 @@ describe("skill routing runtime", () => {
 
 		expect(result?.systemPrompt?.[0]).not.toContain("- diagnose:");
 		expect(result?.systemPrompt?.[0]).toContain("- git-master:");
+	});
+
+	for (const event of ["session_switch", "session_branch"] as const) {
+		test(`clears accumulated names on ${event}`, async () => {
+			const runtime = createRoutingHarness([
+				{ kind: "selected", names: ["diagnose"] },
+				{ kind: "selected", names: ["git-master"] },
+			]);
+			await runtime.beforeAgentStart({
+				prompt: "debug",
+				systemPrompt: SYSTEM_PROMPT,
+			});
+
+			await runtime.resetSession(event);
+			const result = await runtime.beforeAgentStart({
+				prompt: "commit",
+				systemPrompt: SYSTEM_PROMPT,
+			});
+
+			expect(result?.systemPrompt?.[0]).not.toContain("- diagnose:");
+			expect(result?.systemPrompt?.[0]).toContain("- git-master:");
+		});
+	}
+});
+
+describe("skill routing evidence", () => {
+	test("records matching active-model decisions and byte-preserving context", async () => {
+		const evidence = await Bun.file(
+			new URL(
+				"../evals/evidence/progressive-skill-routing-2026-08-19.json",
+				import.meta.url,
+			),
+		).json();
+
+		expect(evidence.routing_evaluation.catalog_skill_count).toBe(289);
+		expect(evidence.routing_evaluation.temperature).toBe(0);
+		expect(evidence.routing_evaluation.cases).toHaveLength(6);
+		for (const scenario of evidence.routing_evaluation.cases) {
+			if (scenario.baseline.confidence === "certain") {
+				expect(scenario.comparison).toBe("exact-set-match");
+				expect(scenario.candidate.decision).toBe("selected");
+				expect(scenario.candidate.skills).toEqual(scenario.baseline.skills);
+				if (scenario.baseline.cumulative_skills) {
+					expect(scenario.candidate.cumulative_skills).toEqual(
+						scenario.baseline.cumulative_skills,
+					);
+				}
+			} else {
+				expect(scenario.comparison).toBe("exact-original-prompt-fallback");
+				expect(scenario.candidate).toEqual({
+					decision: "fallback",
+					reason: "uncertain",
+				});
+			}
+		}
+		expect(
+			evidence.context_probe.active_subprocess_render.non_skill_digest_after,
+		).toBe(
+			evidence.context_probe.active_subprocess_render.non_skill_digest_before,
+		);
+		expect(evidence.context_probe.full_discovery_inventory.visible_skills).toBe(
+			289,
+		);
+		expect(
+			evidence.context_probe.active_subprocess_render.after_catalog_skills,
+		).toBe(0);
 	});
 });

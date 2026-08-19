@@ -26,11 +26,16 @@ export function parseSkillCatalog(
 		if (line === "</skills>") closingMarkers.push(index);
 	}
 
-	if (openingMarkers.length !== 1 || closingMarkers.length !== 1) return undefined;
+	if (openingMarkers.length !== 1 || closingMarkers.length !== 1)
+		return undefined;
 
 	const openingIndex = openingMarkers[0];
 	const closingIndex = closingMarkers[0];
-	if (openingIndex === undefined || closingIndex === undefined || closingIndex <= openingIndex + 1) {
+	if (
+		openingIndex === undefined ||
+		closingIndex === undefined ||
+		closingIndex <= openingIndex + 1
+	) {
 		return undefined;
 	}
 

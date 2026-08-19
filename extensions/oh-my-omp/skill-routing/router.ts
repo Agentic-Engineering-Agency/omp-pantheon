@@ -1,9 +1,9 @@
 import {
-	complete as completeModel,
 	type AssistantMessage,
 	type Context,
 	type Model,
 	type StreamOptions,
+	complete as completeModel,
 } from "@oh-my-pi/pi-ai";
 import type { SkillCatalogEntry } from "./catalog";
 
@@ -24,10 +24,7 @@ export interface RouteSkillsInput {
 	entries: readonly SkillCatalogEntry[];
 	previousNames: ReadonlySet<string>;
 	model: Model | undefined;
-	getApiKey(
-		model: Model,
-		signal: AbortSignal,
-	): Promise<string | undefined>;
+	getApiKey(model: Model, signal: AbortSignal): Promise<string | undefined>;
 }
 
 export type SkillRoutingComplete = (
@@ -50,7 +47,11 @@ function buildInstruction(input: RouteSkillsInput): string[] {
 	const catalog = input.entries.map((entry) => entry.line).join("\n");
 	const previous = [...input.previousNames].join(", ") || "(none)";
 	return [
-		"Select the skills required to handle the user request.",
+		"Select every triggered skill, including mandatory process skills.",
+		"A skill is triggered whenever its catalog description says to use or load it for the request.",
+		"Do not select skills merely because they are generally useful.",
+		"Return an empty skills list only when no catalog skill applies.",
+		"A request without a concrete object or goal is ambiguous; return uncertain.",
 		"Use only names from the catalog. Do not invoke tools or read skill bodies.",
 		"Return JSON only, with exactly these keys and schema:",
 		'{"skills":["skill-name"],"confidence":"certain"|"uncertain"}',
@@ -66,7 +67,9 @@ function parseDecision(
 	knownNames: ReadonlySet<string>,
 ): SkillRoutingDecision {
 	const textBlocks = message.content.filter(
-		(block): block is Extract<(typeof message.content)[number], { type: "text" }> =>
+		(
+			block,
+		): block is Extract<(typeof message.content)[number], { type: "text" }> =>
 			block.type === "text",
 	);
 	if (textBlocks.length !== 1) {
@@ -144,7 +147,7 @@ export async function routeSkills(
 					},
 				],
 			},
-			{ apiKey, maxTokens: 512, signal },
+			{ apiKey, maxTokens: 512, signal, temperature: 0 },
 		);
 		return parseDecision(
 			message,

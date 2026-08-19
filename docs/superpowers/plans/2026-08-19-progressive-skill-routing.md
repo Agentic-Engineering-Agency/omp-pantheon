@@ -474,7 +474,7 @@ BACKUP_DIR="$temp_home/.omp/agent-backups/install" \
 ./install.sh
 test -L "$temp_home/.omp/agent/extensions/oh-my-omp"
 test -f "$temp_home/.omp/agent/extensions/oh-my-omp/skill-routing/runtime.ts"
-test -L "$temp_home/.omp/agent/skills/using-superpowers"
+test -L "$temp_home/.omp/agent/skills/git-master"
 rm -rf "$temp_home"
 ```
 

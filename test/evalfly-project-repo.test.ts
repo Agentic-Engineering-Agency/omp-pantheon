@@ -24,6 +24,7 @@ const criticalEvalFiles = [
 const progressiveSkillRoutingFiles = [
 	"extensions/oh-my-omp/skill-routing/runtime.ts",
 	"test/skill-routing.test.ts",
+	"evals/evidence/progressive-skill-routing-2026-08-19.json",
 ] as const;
 
 describe("omp-pantheon EvalFly project repo", () => {

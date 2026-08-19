@@ -62,7 +62,10 @@ type OwnedFakeContext = FakeContext & {
 	sessionManager: NonNullable<FakeContext["sessionManager"]>;
 };
 
-type EventHandler = (event: unknown, ctx: FakeContext) => Promise<void> | void;
+type EventHandler = (
+	event: unknown,
+	ctx: FakeContext,
+) => Promise<unknown> | unknown;
 
 const roots: string[] = [];
 
@@ -283,9 +286,12 @@ describe("autonomy extension", () => {
 		expect(Object.keys(tools)).toEqual(["autonomy_gate"]);
 	});
 
-	test("Pantheon entrypoint registers Prime host commands instead of legacy loops", async () => {
-		const { commands, handlers, tools } =
+	test("Pantheon entrypoint preserves skill discovery and routing order", async () => {
+		const { commands, ctx, handlers, tools } =
 			await createFakeExtension(registerPantheon);
+		const resources = (await handlers.resources_discover?.[0]?.({}, ctx)) as {
+			skillPaths: string[];
+		};
 
 		expect(Object.keys(commands)).toEqual([
 			"autonomy",
@@ -293,6 +299,7 @@ describe("autonomy extension", () => {
 			"python-skill",
 		]);
 		expect(Object.keys(tools)).toEqual(["autonomy_gate", "refinement_preview"]);
+		expect(resources.skillPaths).toEqual([join(import.meta.dir, "../skills")]);
 		expect(handlers.before_agent_start).toHaveLength(3);
 	});
 

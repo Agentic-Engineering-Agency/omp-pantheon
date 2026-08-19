@@ -36,8 +36,9 @@ from the execution turn.
 Before each execution turn, Pantheon's final `before_agent_start` handler sends
 the user prompt and complete name/description catalog to the active model in a
 separate, tool-free routing call. A strict response with
-`confidence: "certain"` selects catalog names. Selections accumulate for the
-session and render in original catalog order; `session_shutdown` clears them.
+`confidence: "certain"` selects catalog names. Selections accumulate within one
+session and render in original catalog order; switch, branch, and shutdown
+events clear them.
 This changes only the first system-prompt segment's `<skills>` block. Skill
 discovery, manual `skill://` reads, commands, tools, project context, and all
 other system-prompt bytes retain their existing behavior.
@@ -66,6 +67,25 @@ usage. Server-side prompt caching can make `usage.input` hide most of the
 catalog delta; a controlled probe observed 19,501 input tokens normally and
 19,387 with `--no-skills`, so provider usage alone is not accepted as catalog
 evidence.
+
+The active-model routing evaluation in
+`evals/evidence/progressive-skill-routing-2026-08-19.json` covers six fixed
+scenarios: one domain, multiple skills, mandatory process plus domain, no
+domain match, ambiguity, and a task switch. Each scenario compares an
+unmodified full-catalog baseline with a production-router candidate using
+`openai-codex/gpt-5.6-sol`, temperature zero, the same request, and the complete
+289-skill catalog. All five deterministic candidates matched the baseline skill
+set exactly. The ambiguous candidate returned `confidence: "uncertain"` and
+restored the exact original prompt.
+
+An isolated execution probe rendered one skill before routing and zero after
+routing, with the same non-skill SHA-256 digest
+`3f5a173ddc99fe9d62364559dd1938a22ea59fb0bbf768257abaa3d9bcd93201`.
+The execution model returned `OK` and reported 19,378 input tokens. This
+subprocess evidence proves byte preservation and catalog removal for its
+rendered profile; it does not claim a live 289-to-zero turn because that
+profile exposed only one of the 289 skills found by the separate discovery
+inventory.
 
 Use a fixed prompt, model, CWD, and fresh ephemeral session for operational
 comparisons:

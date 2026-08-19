@@ -9,7 +9,7 @@
 	"privacy": { "classification": "public", "sanitized": true },
 	"expected": {
 		"success_criteria": [
-			"The skill-routing runtime and behavioral regression suite exist; behavioral assertions execute in the Bun suite."
+			"The runtime, behavioral tests, and active-model routing/context evidence exist; behavioral assertions execute in the Bun suite."
 		]
 	},
 	"judge": {
@@ -19,7 +19,11 @@
 				"type": "file_exists",
 				"path": "extensions/oh-my-omp/skill-routing/runtime.ts"
 			},
-			{ "type": "file_exists", "path": "test/skill-routing.test.ts" }
+			{ "type": "file_exists", "path": "test/skill-routing.test.ts" },
+			{
+				"type": "file_exists",
+				"path": "evals/evidence/progressive-skill-routing-2026-08-19.json"
+			}
 		]
 	}
 }
