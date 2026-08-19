@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type {
-	ExtensionAPI,
-	ExtensionContext,
-} from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { parseSkillCatalog } from "../extensions/oh-my-omp/skill-routing/catalog";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import {
@@ -80,7 +77,10 @@ describe("skill catalog parsing", () => {
 	test.each([
 		["missing markers", ["ROLE", "TOOLS"]],
 		["missing closing marker", ["<skills>\n- diagnose: Diagnose failures."]],
-		["multiple catalogs", ["<skills>\n- a: A.\n</skills>\n<skills>\n- b: B.\n</skills>"]],
+		[
+			"multiple catalogs",
+			["<skills>\n- a: A.\n</skills>\n<skills>\n- b: B.\n</skills>"],
+		],
 		["nested markers", ["<skills>\n<skills>\n- a: A.\n</skills>\n</skills>"]],
 		["empty catalog", ["<skills>\n</skills>"]],
 		["blank interior line", ["<skills>\n- a: A.\n\n</skills>"]],
@@ -156,10 +156,7 @@ describe("skill routing", () => {
 			'Result: {"skills":["diagnose"],"confidence":"certain"}',
 		],
 		["invalid JSON", "not-json"],
-		[
-			"unknown names",
-			'{"skills":["missing"],"confidence":"certain"}',
-		],
+		["unknown names", '{"skills":["missing"],"confidence":"certain"}'],
 		[
 			"duplicate names",
 			'{"skills":["diagnose","diagnose"],"confidence":"certain"}',
@@ -168,10 +165,7 @@ describe("skill routing", () => {
 			"extra object keys",
 			'{"skills":["diagnose"],"confidence":"certain","extra":true}',
 		],
-		[
-			"missing object keys",
-			'{"skills":["diagnose"]}',
-		],
+		["missing object keys", '{"skills":["diagnose"]}'],
 	] as const)("falls back for %s", async (_name, text) => {
 		const decision = await routeSkills(input(), dependencies(text));
 
@@ -239,27 +233,34 @@ describe("skill routing", () => {
 	});
 });
 
-
 interface RoutingEvent {
 	prompt: string;
 	systemPrompt: string[];
 }
 
-type BeforeAgentStartResult =
-	| { systemPrompt?: string[] }
-	| undefined
-	| void;
+type BeforeAgentStartResult = { systemPrompt?: string[] } | undefined | void;
 
 function createRoutingHarness(
 	decisions: Awaited<ReturnType<SkillRoutingRuntimeOptions["route"]>>[],
 ) {
 	const handlers: Record<
 		string,
-		Array<(event: RoutingEvent, ctx: ExtensionContext) => Promise<BeforeAgentStartResult>>
+		Array<
+			(
+				event: RoutingEvent,
+				ctx: ExtensionContext,
+			) => Promise<BeforeAgentStartResult>
+		>
 	> = {};
 	const logs: Array<{ message: string; metadata: unknown }> = [];
 	const pi = {
-		on(event: string, handler: (event: RoutingEvent, ctx: ExtensionContext) => Promise<BeforeAgentStartResult>) {
+		on(
+			event: string,
+			handler: (
+				event: RoutingEvent,
+				ctx: ExtensionContext,
+			) => Promise<BeforeAgentStartResult>,
+		) {
 			handlers[event] ??= [];
 			handlers[event]?.push(handler);
 		},
