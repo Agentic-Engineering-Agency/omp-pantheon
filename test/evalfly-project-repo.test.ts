@@ -21,6 +21,11 @@ const criticalEvalFiles = [
 	"test/specsafe-cli.test.ts",
 ] as const;
 
+const progressiveSkillRoutingFiles = [
+	"extensions/oh-my-omp/skill-routing/runtime.ts",
+	"test/skill-routing.test.ts",
+] as const;
+
 describe("omp-pantheon EvalFly project repo", () => {
 	test("defines a real smoke suite for critical EvalFly harness files", async () => {
 		const config = JSON.parse(
@@ -29,7 +34,7 @@ describe("omp-pantheon EvalFly project repo", () => {
 
 		expect(config.schema_version).toBe("evalfly.config.v1");
 		expect(config.name).toBe("omp-pantheon EvalFly smoke suite");
-		expect(config.cases).toHaveLength(criticalEvalFiles.length);
+		expect(config.cases).toHaveLength(criticalEvalFiles.length + 1);
 		expect(
 			config.cases.map((testCase: { case_id: string }) => testCase.case_id),
 		).toEqual([
@@ -44,6 +49,7 @@ describe("omp-pantheon EvalFly project repo", () => {
 			"evaluation-flywheel-skill-exists",
 			"evalfly-gate-test-exists",
 			"specsafe-recovery-regression-exists",
+			"progressive-skill-routing-regression-exists",
 		]);
 
 		for (const [index, testCase] of config.cases.entries()) {
@@ -53,9 +59,16 @@ describe("omp-pantheon EvalFly project repo", () => {
 				classification: "public",
 				sanitized: true,
 			});
+			const assertions =
+				index < criticalEvalFiles.length
+					? [{ type: "file_exists", path: criticalEvalFiles[index] }]
+					: progressiveSkillRoutingFiles.map((path) => ({
+							type: "file_exists",
+							path,
+						}));
 			expect(testCase.judge).toEqual({
 				type: "deterministic",
-				assertions: [{ type: "file_exists", path: criticalEvalFiles[index] }],
+				assertions,
 			});
 		}
 	});

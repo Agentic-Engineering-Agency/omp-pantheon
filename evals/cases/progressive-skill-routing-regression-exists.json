@@ -1,0 +1,25 @@
+{
+	"schema_version": "evalfly.case.v1",
+	"case_id": "progressive-skill-routing-regression-exists",
+	"title": "Progressive skill routing regression suite exists",
+	"suite": "smoke",
+	"risk_tier": "critical",
+	"task_type": "test_contract",
+	"source": { "kind": "project_eval_repo" },
+	"privacy": { "classification": "public", "sanitized": true },
+	"expected": {
+		"success_criteria": [
+			"The skill-routing runtime and behavioral regression suite exist; behavioral assertions execute in the Bun suite."
+		]
+	},
+	"judge": {
+		"type": "deterministic",
+		"assertions": [
+			{
+				"type": "file_exists",
+				"path": "extensions/oh-my-omp/skill-routing/runtime.ts"
+			},
+			{ "type": "file_exists", "path": "test/skill-routing.test.ts" }
+		]
+	}
+}
