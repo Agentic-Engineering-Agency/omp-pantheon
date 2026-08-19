@@ -1,10 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@oh-my-pi/pi-coding-agent";
 import { parseSkillCatalog } from "../extensions/oh-my-omp/skill-routing/catalog";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import {
 	type RouteSkillsDependencies,
 	routeSkills,
 } from "../extensions/oh-my-omp/skill-routing/router";
+import {
+	registerSkillRouting,
+	type SkillRoutingRuntimeOptions,
+} from "../extensions/oh-my-omp/skill-routing/runtime";
 
 const SYSTEM_PROMPT = [
 	[
@@ -228,5 +236,173 @@ describe("skill routing", () => {
 		);
 
 		expect(decision).toEqual({ kind: "fallback", reason: "timeout" });
+	});
+});
+
+
+interface RoutingEvent {
+	prompt: string;
+	systemPrompt: string[];
+}
+
+type BeforeAgentStartResult =
+	| { systemPrompt?: string[] }
+	| undefined
+	| void;
+
+function createRoutingHarness(
+	decisions: Awaited<ReturnType<SkillRoutingRuntimeOptions["route"]>>[],
+) {
+	const handlers: Record<
+		string,
+		Array<(event: RoutingEvent, ctx: ExtensionContext) => Promise<BeforeAgentStartResult>>
+	> = {};
+	const logs: Array<{ message: string; metadata: unknown }> = [];
+	const pi = {
+		on(event: string, handler: (event: RoutingEvent, ctx: ExtensionContext) => Promise<BeforeAgentStartResult>) {
+			handlers[event] ??= [];
+			handlers[event]?.push(handler);
+		},
+		logger: {
+			debug(message: string, metadata: unknown) {
+				logs.push({ message, metadata });
+			},
+		},
+	} as unknown as ExtensionAPI;
+	registerSkillRouting(pi, {
+		route: async () => {
+			const decision = decisions.shift();
+			if (!decision) throw new Error("missing test routing decision");
+			return decision;
+		},
+	});
+	const ctx = {
+		model: MODEL,
+		modelRegistry: {
+			getApiKey: async () => "credential",
+		},
+		sessionManager: {
+			getSessionId: () => "session-1",
+		},
+	} as unknown as ExtensionContext;
+	const beforeAgentStart = async (event: RoutingEvent) => {
+		const handler = handlers.before_agent_start?.[0];
+		if (!handler) throw new Error("before_agent_start handler missing");
+		return handler(event, ctx);
+	};
+	const shutdown = async () => {
+		const handler = handlers.session_shutdown?.[0];
+		if (!handler) throw new Error("session_shutdown handler missing");
+		await handler({ prompt: "", systemPrompt: [] }, ctx);
+	};
+	return { beforeAgentStart, handlers, logs, shutdown };
+}
+
+describe("skill routing runtime", () => {
+	test("accumulates selections while replacing only the catalog", async () => {
+		const runtime = createRoutingHarness([
+			{ kind: "selected", names: ["diagnose"] },
+			{ kind: "selected", names: ["git-master"] },
+		]);
+		const first = await runtime.beforeAgentStart({
+			prompt: "debug",
+			systemPrompt: SYSTEM_PROMPT,
+		});
+		const second = await runtime.beforeAgentStart({
+			prompt: "commit",
+			systemPrompt: SYSTEM_PROMPT,
+		});
+
+		expect(first?.systemPrompt).toEqual([
+			[
+				"ROLE",
+				"<skills>",
+				"- diagnose: Diagnose failures before editing.",
+				"</skills>",
+				"TOOLS",
+			].join("\n"),
+			"PROJECT CONTEXT",
+		]);
+		expect(second?.systemPrompt).toEqual([
+			[
+				"ROLE",
+				"<skills>",
+				"- diagnose: Diagnose failures before editing.",
+				"- git-master: Handle every git operation.",
+				"</skills>",
+				"TOOLS",
+			].join("\n"),
+			"PROJECT CONTEXT",
+		]);
+	});
+
+	test("returns the exact original prompt on routing fallback", async () => {
+		const runtime = createRoutingHarness([
+			{ kind: "fallback", reason: "invalid-response" },
+		]);
+		const event = { prompt: "ambiguous", systemPrompt: SYSTEM_PROMPT };
+
+		const result = await runtime.beforeAgentStart(event);
+
+		expect(result?.systemPrompt).toBe(SYSTEM_PROMPT);
+		expect(event.systemPrompt).toBe(SYSTEM_PROMPT);
+	});
+
+	test("returns the exact original prompt when catalog parsing fails", async () => {
+		const runtime = createRoutingHarness([]);
+		const malformed = ["ROLE", "PROJECT CONTEXT"];
+
+		const result = await runtime.beforeAgentStart({
+			prompt: "debug",
+			systemPrompt: malformed,
+		});
+
+		expect(result?.systemPrompt).toBe(malformed);
+	});
+
+	test("logs fallback metadata without sensitive routing content", async () => {
+		const runtime = createRoutingHarness([
+			{ kind: "fallback", reason: "provider-error" },
+		]);
+
+		await runtime.beforeAgentStart({
+			prompt: "SECRET USER PROMPT",
+			systemPrompt: SYSTEM_PROMPT,
+		});
+
+		expect(runtime.logs).toEqual([
+			{
+				message: "Skill routing fell back to the full catalog",
+				metadata: {
+					reason: "provider-error",
+					catalogCount: 3,
+					selectedCount: 0,
+				},
+			},
+		]);
+		expect(JSON.stringify(runtime.logs)).not.toContain("SECRET USER PROMPT");
+		expect(JSON.stringify(runtime.logs)).not.toContain(
+			"Diagnose failures before editing.",
+		);
+	});
+
+	test("clears accumulated names on session shutdown", async () => {
+		const runtime = createRoutingHarness([
+			{ kind: "selected", names: ["diagnose"] },
+			{ kind: "selected", names: ["git-master"] },
+		]);
+		await runtime.beforeAgentStart({
+			prompt: "debug",
+			systemPrompt: SYSTEM_PROMPT,
+		});
+
+		await runtime.shutdown();
+		const result = await runtime.beforeAgentStart({
+			prompt: "commit",
+			systemPrompt: SYSTEM_PROMPT,
+		});
+
+		expect(result?.systemPrompt?.[0]).not.toContain("- diagnose:");
+		expect(result?.systemPrompt?.[0]).toContain("- git-master:");
 	});
 });

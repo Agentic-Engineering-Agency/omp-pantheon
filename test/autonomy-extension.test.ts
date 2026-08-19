@@ -284,7 +284,8 @@ describe("autonomy extension", () => {
 	});
 
 	test("Pantheon entrypoint registers Prime host commands instead of legacy loops", async () => {
-		const { commands, tools } = await createFakeExtension(registerPantheon);
+		const { commands, handlers, tools } =
+			await createFakeExtension(registerPantheon);
 
 		expect(Object.keys(commands)).toEqual([
 			"autonomy",
@@ -292,6 +293,7 @@ describe("autonomy extension", () => {
 			"python-skill",
 		]);
 		expect(Object.keys(tools)).toEqual(["autonomy_gate", "refinement_preview"]);
+		expect(handlers.before_agent_start).toHaveLength(3);
 	});
 
 	test("entrypoint exposes human refinement proposal and lifecycle commands", async () => {
