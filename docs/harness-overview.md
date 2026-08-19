@@ -26,6 +26,63 @@ shell, browser, debugger, LSP/DAP, and general-purpose agent workflows.
 - approval-gated refinement plus isolated, manifest-driven Python skills;
 - installation as one source-of-truth OMP bundle under `~/.omp/omp-pantheon`.
 
+## Progressive skill routing
+
+OMP still discovers every skill, resolves source precedence, and keeps the full
+active `Skill[]` registry. It already defers each `SKILL.md` body until a
+`skill://<name>` read; Pantheon additionally removes unselected catalog lines
+from the execution turn.
+
+Before each execution turn, Pantheon's final `before_agent_start` handler sends
+the user prompt and complete name/description catalog to the active model in a
+separate, tool-free routing call. A strict response with
+`confidence: "certain"` selects catalog names. Selections accumulate for the
+session and render in original catalog order; `session_shutdown` clears them.
+This changes only the first system-prompt segment's `<skills>` block. Skill
+discovery, manual `skill://` reads, commands, tools, project context, and all
+other system-prompt bytes retain their existing behavior.
+
+Routing is fail-open. Missing markers, model or credential resolution failures,
+timeouts, provider errors, invalid JSON, unknown or duplicate names, and
+`confidence: "uncertain"` all restore the exact original `systemPrompt` array.
+Debug logs contain only the failure reason, catalog count, and selected count;
+they never contain prompts, descriptions, credentials, or model responses. The
+extension changes no global OMP configuration.
+
+The 2026-08-19 active-discovery probe found 289 visible skills and an estimated
+30,030 catalog tokens:
+
+| Provider | Skills | Estimated catalog tokens |
+|---|---:|---:|
+| `claude-plugins` | 173 | 21,131 |
+| `claude` | 23 | 3,004 |
+| `omp-managed` | 51 | 2,958 |
+| `custom` | 23 | 1,454 |
+| `native` | 18 | 1,404 |
+| `agents` | 1 | 79 |
+
+Those are system-prompt estimates from rendered skill metadata, not provider
+usage. Server-side prompt caching can make `usage.input` hide most of the
+catalog delta; a controlled probe observed 19,501 input tokens normally and
+19,387 with `--no-skills`, so provider usage alone is not accepted as catalog
+evidence.
+
+Use a fixed prompt, model, CWD, and fresh ephemeral session for operational
+comparisons:
+
+```bash
+prompt='Responde exactamente: OK'
+model='openai-codex/gpt-5.6-sol'
+cwd="$(pwd)"
+omp --mode json --print --no-session --model "$model" --cwd "$cwd" "$prompt"
+omp --mode json --print --no-session --model "$model" --cwd "$cwd" --no-skills "$prompt"
+```
+
+Capture the final `message_end` usage from both commands, but pair it with the
+actual rendered catalog count/token estimate and a digest of the non-skill
+prompt. `skill://diagnosing-omp-initial-context` defines the controlled probe
+and attribution procedure.
+
 ## What this harness is optimizing for
 
 The target failure mode is not “the agent cannot edit code.” OMP already solves that.
@@ -52,6 +109,7 @@ The target failure modes are:
 | SpecSafe/Seshat discipline | Tie work to slices, specs, approvals, docs, issue/PR context, and guarded mutations. | Implemented as skills/hooks/agent conventions. |
 | Honcho memory | Durable memory recall/search/conclusions across sessions. | Integrated through the OMP extension/tool layer when configured. |
 | EvalFly | Project-local evaluation evidence: config, cases, runs, reports, traces, compare, enforcement. | Implemented as opt-in CLI, templates, docs, hooks, and tests. |
+| Progressive skill routing | Keep every skill discoverable while exposing only certain, cumulative catalog selections to the execution turn. | Implemented in the Pantheon extension; all failures restore the original full prompt. |
 | Local enforcement | Block local session completion when explicit EvalFly evidence is required and missing. | Implemented; activated per project with `evalfly enforce start`. |
 | CI enforcement | Reject PRs without EvalFly check evidence. | Template exists; consuming repos must install workflow and branch protection. |
 | Branch E2E | Verify real user behavior through UI/backend/log/network evidence and negative cases. | Implemented as `agentic-branch-e2e` skill/protocol; not yet automatically imported into EvalFly. |
