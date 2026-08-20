@@ -8,9 +8,9 @@
     "test": "bun test ./test/*.test.ts ./test/**/*.test.ts ./skills/**/test/*.test.ts",
     "test:unit": "bun test --test-name-pattern='\\[unit\\]' ./test/*.test.ts ./test/**/*.test.ts ./skills/**/test/*.test.ts",
     "typecheck": "tsc --noEmit && (cd extensions/oh-my-omp && bun run typecheck) && (cd extensions/i-have-adhd && bun run typecheck)",
-    "format": "bun x --bun @biomejs/biome format --write hooks test skills evals/config.json evals/cases evals/rubrics extensions/oh-my-omp/*.ts extensions/oh-my-omp/autonomy extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/python-skills extensions/oh-my-omp/refinement extensions/i-have-adhd",
-    "format:check": "bun x --bun @biomejs/biome format hooks test skills evals/config.json evals/cases evals/rubrics extensions/oh-my-omp/*.ts extensions/oh-my-omp/autonomy extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/python-skills extensions/oh-my-omp/refinement extensions/i-have-adhd",
-    "lint": "bun x --bun @biomejs/biome check hooks test skills evals/config.json evals/cases evals/rubrics extensions/oh-my-omp/*.ts extensions/oh-my-omp/autonomy extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/python-skills extensions/oh-my-omp/refinement extensions/i-have-adhd"
+    "format": "bun x --bun @biomejs/biome format --write hooks test skills evals/config.json evals/cases evals/evidence evals/rubrics extensions/oh-my-omp/*.ts extensions/oh-my-omp/autonomy extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/python-skills extensions/oh-my-omp/refinement extensions/oh-my-omp/skill-routing extensions/i-have-adhd",
+    "format:check": "bun x --bun @biomejs/biome format hooks test skills evals/config.json evals/cases evals/evidence evals/rubrics extensions/oh-my-omp/*.ts extensions/oh-my-omp/autonomy extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/python-skills extensions/oh-my-omp/refinement extensions/oh-my-omp/skill-routing extensions/i-have-adhd",
+    "lint": "bun x --bun @biomejs/biome check hooks test skills evals/config.json evals/cases evals/evidence evals/rubrics extensions/oh-my-omp/*.ts extensions/oh-my-omp/autonomy extensions/oh-my-omp/evalfly extensions/oh-my-omp/hooks extensions/oh-my-omp/python-skills extensions/oh-my-omp/refinement extensions/oh-my-omp/skill-routing extensions/i-have-adhd"
   },
   "dependencies": {
     "@linear/sdk": "^82.1.0",

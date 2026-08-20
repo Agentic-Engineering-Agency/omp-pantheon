@@ -1,0 +1,139 @@
+{
+	"schema_version": "pantheon.skill-routing-evidence.v1",
+	"recorded_at": "2026-08-19",
+	"model": "openai-codex/gpt-5.6-sol",
+	"routing_evaluation": {
+		"method": "For each scenario, one baseline call asked the active model which skills the unmodified full-catalog execution flow would read or use; one candidate call used the production routing prompt. Both calls used the same active credential, temperature 0, user request, and complete 289-skill catalog. Deterministic cases require exact set equality. An uncertain baseline requires the candidate's exact-original-prompt fallback.",
+		"catalog_skill_count": 289,
+		"catalog_scope": "Complete visible OMP Skill[] discovery inventory for the worktree.",
+		"temperature": 0,
+		"cases": [
+			{
+				"id": "single-domain",
+				"prompt": "Use Playwright to test the login flow.",
+				"baseline": {
+					"confidence": "certain",
+					"skills": ["using-superpowers", "playwright"]
+				},
+				"candidate": {
+					"decision": "selected",
+					"skills": ["using-superpowers", "playwright"]
+				},
+				"comparison": "exact-set-match"
+			},
+			{
+				"id": "multiple-skills",
+				"prompt": "Use CodeRabbit to review this code change, then run its existing Playwright test suite from the shell.",
+				"baseline": {
+					"confidence": "certain",
+					"skills": ["using-superpowers", "code-review", "playwright-cli"]
+				},
+				"candidate": {
+					"decision": "selected",
+					"skills": ["using-superpowers", "code-review", "playwright-cli"]
+				},
+				"comparison": "exact-set-match"
+			},
+			{
+				"id": "process-plus-domain",
+				"prompt": "Diagnose `TypeError: env.DB is undefined` in this Cloudflare Worker at `src/index.ts:42`.",
+				"baseline": {
+					"confidence": "certain",
+					"skills": [
+						"using-superpowers",
+						"diagnose",
+						"systematic-debugging",
+						"cloudflare",
+						"workers-best-practices"
+					]
+				},
+				"candidate": {
+					"decision": "selected",
+					"skills": [
+						"using-superpowers",
+						"diagnose",
+						"systematic-debugging",
+						"cloudflare",
+						"workers-best-practices"
+					]
+				},
+				"comparison": "exact-set-match"
+			},
+			{
+				"id": "no-domain",
+				"prompt": "Calculate 37 multiplied by 19.",
+				"baseline": {
+					"confidence": "certain",
+					"skills": ["using-superpowers"]
+				},
+				"candidate": {
+					"decision": "selected",
+					"skills": ["using-superpowers"]
+				},
+				"comparison": "exact-set-match"
+			},
+			{
+				"id": "ambiguous",
+				"prompt": "Improve this.",
+				"baseline": {
+					"confidence": "uncertain",
+					"skills": ["using-superpowers"]
+				},
+				"candidate": {
+					"decision": "fallback",
+					"reason": "uncertain"
+				},
+				"comparison": "exact-original-prompt-fallback"
+			},
+			{
+				"id": "task-switch",
+				"prompt": "Commit the fix.",
+				"previous_skills": ["using-superpowers", "diagnose"],
+				"baseline": {
+					"confidence": "certain",
+					"skills": ["git-master", "verification-before-completion"],
+					"cumulative_skills": [
+						"using-superpowers",
+						"diagnose",
+						"git-master",
+						"verification-before-completion"
+					]
+				},
+				"candidate": {
+					"decision": "selected",
+					"skills": ["git-master", "verification-before-completion"],
+					"cumulative_skills": [
+						"using-superpowers",
+						"diagnose",
+						"git-master",
+						"verification-before-completion"
+					]
+				},
+				"comparison": "exact-set-match"
+			}
+		]
+	},
+	"context_probe": {
+		"full_discovery_inventory": {
+			"visible_skills": 289,
+			"estimated_catalog_tokens": 30030,
+			"method": "OMP active Skill[] discovery and rendered metadata character estimate"
+		},
+		"active_subprocess_render": {
+			"before_catalog_skills": 1,
+			"before_catalog_characters": 367,
+			"before_estimated_catalog_tokens": 92,
+			"after_catalog_skills": 0,
+			"after_catalog_characters": 0,
+			"non_skill_digest_before": "3f5a173ddc99fe9d62364559dd1938a22ea59fb0bbf768257abaa3d9bcd93201",
+			"non_skill_digest_after": "3f5a173ddc99fe9d62364559dd1938a22ea59fb0bbf768257abaa3d9bcd93201",
+			"execution_output": "OK",
+			"execution_provider_input_tokens": 19378,
+			"caveat": "The isolated OMP subprocess profile rendered one visible skill, while the SDK inventory found 289. This probe proves byte preservation and routing removal for the rendered subprocess catalog; it does not claim a live 289-to-zero execution turn."
+		},
+		"fallback": {
+			"status": "pass",
+			"evidence": "Unit and hands-on QA scenarios preserve the exact original systemPrompt array reference for uncertain, malformed, provider, timeout, credential, model, thrown-router, and session-change fallbacks."
+		}
+	}
+}

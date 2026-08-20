@@ -26,6 +26,93 @@ shell, browser, debugger, LSP/DAP, and general-purpose agent workflows.
 - approval-gated refinement plus isolated, manifest-driven Python skills;
 - installation as one source-of-truth OMP bundle under `~/.omp/omp-pantheon`.
 
+## Progressive skill routing
+
+OMP still discovers every skill, resolves source precedence, and keeps the full
+active `Skill[]` registry. It already defers each `SKILL.md` body until a
+`skill://<name>` read; Pantheon additionally removes unselected catalog entries
+from the execution turn. The catalog parser accepts both official OMP renderings:
+the standard list form whose entries start with `- name: description` and may
+carry unindented continuation text or blank separator lines, and the
+custom-system-prompt `<skill name="name">...description...</skill>` XML form. It
+only rewrites homogeneous, byte-preservable catalogs; mixed or malformed
+catalogs fail open.
+
+Before each execution turn, Pantheon's final `before_agent_start` handler sends
+the user prompt and complete name/description catalog to the active model in a
+separate, tool-free routing call. A strict response with
+`confidence: "certain"` selects catalog names. Selections accumulate within one
+session and render in original catalog order; switch, branch, and shutdown
+events clear them.
+This changes only the first system-prompt segment's `<skills>` block. Skill
+discovery, manual `skill://` reads, commands, tools, project context, and all
+other system-prompt bytes retain their existing behavior.
+
+Routing is fail-open. Missing markers, model or credential resolution failures,
+timeouts, provider errors, invalid JSON, unknown or duplicate names, and
+`confidence: "uncertain"` all restore the exact original `systemPrompt` array.
+Debug logs contain only the failure reason, catalog count, and selected count;
+they never contain prompts, descriptions, credentials, or model responses. The
+extension changes no global OMP configuration.
+
+The 2026-08-19 active-discovery probe found 289 visible skills and an estimated
+30,030 catalog tokens:
+
+| Provider | Skills | Estimated catalog tokens |
+|---|---:|---:|
+| `claude-plugins` | 173 | 21,131 |
+| `claude` | 23 | 3,004 |
+| `omp-managed` | 51 | 2,958 |
+| `custom` | 23 | 1,454 |
+| `native` | 18 | 1,404 |
+| `agents` | 1 | 79 |
+
+Those are system-prompt estimates from rendered skill metadata, not provider
+usage. Server-side prompt caching can make `usage.input` hide most of the
+catalog delta; a controlled probe observed 19,501 input tokens normally and
+19,387 with `--no-skills`, so provider usage alone is not accepted as catalog
+evidence.
+
+The active-model routing evaluation in
+`evals/evidence/progressive-skill-routing-2026-08-19.json` covers six fixed
+scenarios: one domain, multiple skills, mandatory process plus domain, no
+domain match, ambiguity, and a task switch. Each scenario compares an
+unmodified full-catalog baseline with a production-router candidate using
+`openai-codex/gpt-5.6-sol`, temperature zero, the same request, and the complete
+289-skill catalog. All five deterministic candidates matched the baseline skill
+set exactly. The ambiguous candidate returned `confidence: "uncertain"` and
+restored the exact original prompt.
+
+An isolated execution probe rendered one skill before routing and zero after
+routing, with the same non-skill SHA-256 digest
+`3f5a173ddc99fe9d62364559dd1938a22ea59fb0bbf768257abaa3d9bcd93201`.
+The execution model returned `OK` and reported 19,378 input tokens. This
+subprocess evidence proves byte preservation and catalog removal for its
+rendered profile; it does not claim a live 289-to-zero turn because that
+profile exposed only one of the 289 skills found by the separate discovery
+inventory.
+
+For branch E2E compatibility probes, use an isolated neutral CWD whose local
+`.omp/config.yml` does not narrow `skills.includeSkills`. A project-local CWD
+that intentionally filters skills should be probed separately and must remain
+filtered rather than being expanded by progressive routing.
+
+Use a fixed prompt, model, CWD, and fresh ephemeral session for operational
+comparisons:
+
+```bash
+prompt='Responde exactamente: OK'
+model='openai-codex/gpt-5.6-sol'
+cwd="$(pwd)"
+omp --mode json --print --no-session --model "$model" --cwd "$cwd" "$prompt"
+omp --mode json --print --no-session --model "$model" --cwd "$cwd" --no-skills "$prompt"
+```
+
+Capture the final `message_end` usage from both commands, but pair it with the
+actual rendered catalog count/token estimate and a digest of the non-skill
+prompt. `skill://diagnosing-omp-initial-context` defines the controlled probe
+and attribution procedure.
+
 ## What this harness is optimizing for
 
 The target failure mode is not “the agent cannot edit code.” OMP already solves that.
@@ -52,6 +139,7 @@ The target failure modes are:
 | SpecSafe/Seshat discipline | Tie work to slices, specs, approvals, docs, issue/PR context, and guarded mutations. | Implemented as skills/hooks/agent conventions. |
 | Honcho memory | Durable memory recall/search/conclusions across sessions. | Integrated through the OMP extension/tool layer when configured. |
 | EvalFly | Project-local evaluation evidence: config, cases, runs, reports, traces, compare, enforcement. | Implemented as opt-in CLI, templates, docs, hooks, and tests. |
+| Progressive skill routing | Keep every skill discoverable while exposing only certain, cumulative catalog selections to the execution turn. | Implemented in the Pantheon extension; all failures restore the original full prompt. |
 | Local enforcement | Block local session completion when explicit EvalFly evidence is required and missing. | Implemented; activated per project with `evalfly enforce start`. |
 | CI enforcement | Reject PRs without EvalFly check evidence. | Template exists; consuming repos must install workflow and branch protection. |
 | Branch E2E | Verify real user behavior through UI/backend/log/network evidence and negative cases. | Implemented as `agentic-branch-e2e` skill/protocol; not yet automatically imported into EvalFly. |
