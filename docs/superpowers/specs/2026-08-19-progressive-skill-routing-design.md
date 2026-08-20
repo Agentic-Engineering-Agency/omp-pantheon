@@ -57,12 +57,14 @@ It accepts the complete `string[]` system prompt supplied to `before_agent_start
 - the exact suffix after `</skills>`;
 - untouched remaining system-prompt segments.
 
-OMP has two supported catalog renderings: the standard single-line
-`- name: description` form and the custom-system-prompt XML form
+OMP has two supported catalog renderings: the standard list form whose entries
+start with `- name: description` and may include unindented continuation text or
+blank separator lines, and the custom-system-prompt XML form
 `<skill name="name">...description...</skill>`. The parser accepts either
 homogeneous form and preserves each complete original entry block. It rejects
-mixed forms, malformed or nested XML, duplicate names, missing markers, and an
-empty catalog. The caller then returns the original prompt.
+mixed forms, malformed or nested XML, orphan list continuation text, duplicate
+names, missing markers, and an empty catalog. The caller then returns the
+original prompt.
 
 Branch E2E compatibility probes must run from a neutral isolated CWD whose
 local `.omp/config.yml` does not narrow `skills.includeSkills`; otherwise the

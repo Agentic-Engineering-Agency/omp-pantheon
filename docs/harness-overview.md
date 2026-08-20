@@ -32,9 +32,11 @@ OMP still discovers every skill, resolves source precedence, and keeps the full
 active `Skill[]` registry. It already defers each `SKILL.md` body until a
 `skill://<name>` read; Pantheon additionally removes unselected catalog entries
 from the execution turn. The catalog parser accepts both official OMP renderings:
-the standard `- name: description` list form and the custom-system-prompt
-`<skill name="name">...description...</skill>` XML form. It only rewrites
-homogeneous, byte-preservable catalogs; mixed or malformed catalogs fail open.
+the standard list form whose entries start with `- name: description` and may
+carry unindented continuation text or blank separator lines, and the
+custom-system-prompt `<skill name="name">...description...</skill>` XML form. It
+only rewrites homogeneous, byte-preservable catalogs; mixed or malformed
+catalogs fail open.
 
 Before each execution turn, Pantheon's final `before_agent_start` handler sends
 the user prompt and complete name/description catalog to the active model in a

@@ -25,6 +25,23 @@ const SYSTEM_PROMPT = [
 	"PROJECT CONTEXT",
 ];
 
+const MULTILINE_LIST_SYSTEM_PROMPT = [
+	[
+		"ROLE",
+		"<skills>",
+		"- diagnose: Diagnose failures before editing.",
+		"Use before changing code.",
+		"",
+		"- git-master: Handle every git operation.",
+		"",
+		"- review-work: Review completed implementation.",
+		"Check constraints and evidence.",
+		"</skills>",
+		"TOOLS",
+	].join("\n"),
+	"PROJECT CONTEXT",
+];
+
 const XML_SYSTEM_PROMPT = [
 	[
 		"ROLE",
@@ -90,6 +107,61 @@ describe("skill catalog parsing", () => {
 		]);
 	});
 
+	test("renders selected multiline list blocks in catalog order without byte drift", () => {
+		const catalog = parseSkillCatalog(MULTILINE_LIST_SYSTEM_PROMPT);
+
+		expect(catalog).toBeDefined();
+		expect(catalog?.entries).toEqual([
+			{
+				name: "diagnose",
+				description:
+					"Diagnose failures before editing.\nUse before changing code.",
+				line: [
+					"- diagnose: Diagnose failures before editing.",
+					"Use before changing code.",
+					"",
+				].join("\n"),
+			},
+			{
+				name: "git-master",
+				description: "Handle every git operation.",
+				line: ["- git-master: Handle every git operation.", ""].join("\n"),
+			},
+			{
+				name: "review-work",
+				description:
+					"Review completed implementation.\nCheck constraints and evidence.",
+				line: [
+					"- review-work: Review completed implementation.",
+					"Check constraints and evidence.",
+				].join("\n"),
+			},
+		]);
+		expect(catalog?.render(new Set(["git-master", "diagnose"]))).toEqual([
+			[
+				"ROLE",
+				"<skills>",
+				"- diagnose: Diagnose failures before editing.",
+				"Use before changing code.",
+				"",
+				"- git-master: Handle every git operation.",
+				"",
+				"</skills>",
+				"TOOLS",
+			].join("\n"),
+			"PROJECT CONTEXT",
+		]);
+	});
+
+	test("renders an empty multiline list selection without separator drift", () => {
+		const catalog = parseSkillCatalog(MULTILINE_LIST_SYSTEM_PROMPT);
+
+		expect(catalog?.render(new Set())).toEqual([
+			["ROLE", "<skills>", "</skills>", "TOOLS"].join("\n"),
+			"PROJECT CONTEXT",
+		]);
+	});
+
 	test("renders selected XML blocks in catalog order without byte drift", () => {
 		const catalog = parseSkillCatalog(XML_SYSTEM_PROMPT);
 
@@ -97,7 +169,8 @@ describe("skill catalog parsing", () => {
 		expect(catalog?.entries).toEqual([
 			{
 				name: "diagnose",
-				description: "Diagnose failures before editing.\nUse before changing code.",
+				description:
+					"Diagnose failures before editing.\nUse before changing code.",
 				line: [
 					'<skill name="diagnose">Diagnose failures before editing.',
 					"Use before changing code.",
@@ -143,19 +216,26 @@ describe("skill catalog parsing", () => {
 	test.each([
 		[
 			"mixed list and XML entries",
-			["<skills>\n- a: A.\n<skill name=\"b\">B.</skill>\n</skills>"],
+			['<skills>\n- a: A.\n<skill name="b">B.</skill>\n</skills>'],
 		],
 		["malformed XML entry", ["<skills>\n<skill>A.</skill>\n</skills>"]],
 		[
 			"nested XML entry",
-			["<skills>\n<skill name=\"a\">A <skill name=\"b\">B.</skill></skill>\n</skills>"],
+			[
+				'<skills>\n<skill name="a">A <skill name="b">B.</skill></skill>\n</skills>',
+			],
 		],
-		["unterminated XML entry", ["<skills>\n<skill name=\"a\">A.\n</skills>"]],
+		["unterminated XML entry", ['<skills>\n<skill name="a">A.\n</skills>']],
 		[
 			"duplicate XML name",
-			["<skills>\n<skill name=\"a\">A.</skill>\n<skill name=\"a\">Again.</skill>\n</skills>"],
+			[
+				'<skills>\n<skill name="a">A.</skill>\n<skill name="a">Again.</skill>\n</skills>',
+			],
 		],
-		["empty XML description", ["<skills>\n<skill name=\"a\"></skill>\n</skills>"]],
+		[
+			"empty XML description",
+			['<skills>\n<skill name="a"></skill>\n</skills>'],
+		],
 	])("rejects %s", (_name, prompt) => {
 		expect(parseSkillCatalog(prompt)).toBeUndefined();
 	});
@@ -169,8 +249,11 @@ describe("skill catalog parsing", () => {
 		],
 		["nested markers", ["<skills>\n<skills>\n- a: A.\n</skills>\n</skills>"]],
 		["empty catalog", ["<skills>\n</skills>"]],
-		["blank interior line", ["<skills>\n- a: A.\n\n</skills>"]],
-		["malformed entry", ["<skills>\na: A.\n</skills>"]],
+		["leading blank interior line", ["<skills>\n\n- a: A.\n</skills>"]],
+		[
+			"orphan continuation line",
+			["<skills>\na continuation\n- a: A.\n</skills>"],
+		],
 		["blank name", ["<skills>\n- : A.\n</skills>"]],
 		["duplicate name", ["<skills>\n- a: A.\n- a: Again.\n</skills>"]],
 	])("rejects %s", (_name, prompt) => {

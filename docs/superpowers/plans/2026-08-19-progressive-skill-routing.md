@@ -115,8 +115,9 @@ Implementation rules:
 
 - require exactly one `<skills>` and one `</skills>` marker in segment zero;
 - require the closing marker after the opening marker;
-- parse each interior line with `/^- ([^:\n]+): (.+)$/`;
-- reject blank, duplicate, or malformed names;
+- parse standard list entries from `- name: description` starts, grouping
+  unindented continuation text and trailing blank separators into that entry block;
+- reject leading blank/orphan continuation text, duplicate, or malformed names;
 - reject zero entries;
 - capture each full original entry block;
 - render by filtering original entry blocks in original order;
@@ -527,8 +528,9 @@ Keep the PR draft until review findings and all gates pass.
 - Preserve the current `parseSkillCatalog(systemPrompt)` API.
 - Generalize each `SkillCatalogEntry` from a single original line to an
   original entry block while retaining `name` and `description`.
-- Accept both OMP's standard list catalog and its custom-system-prompt XML
-  catalog without changing discovery, `skill://`, configuration, or fallback.
+- Accept both OMP's standard list catalog, including multiline continuation
+  text and blank separators, and its custom-system-prompt XML catalog without
+  changing discovery, `skill://`, configuration, or fallback.
 
 - [ ] **Step 1: Add failing XML regressions**
 
