@@ -30,8 +30,11 @@ shell, browser, debugger, LSP/DAP, and general-purpose agent workflows.
 
 OMP still discovers every skill, resolves source precedence, and keeps the full
 active `Skill[]` registry. It already defers each `SKILL.md` body until a
-`skill://<name>` read; Pantheon additionally removes unselected catalog lines
-from the execution turn.
+`skill://<name>` read; Pantheon additionally removes unselected catalog entries
+from the execution turn. The catalog parser accepts both official OMP renderings:
+the standard `- name: description` list form and the custom-system-prompt
+`<skill name="name">...description...</skill>` XML form. It only rewrites
+homogeneous, byte-preservable catalogs; mixed or malformed catalogs fail open.
 
 Before each execution turn, Pantheon's final `before_agent_start` handler sends
 the user prompt and complete name/description catalog to the active model in a
@@ -86,6 +89,11 @@ subprocess evidence proves byte preservation and catalog removal for its
 rendered profile; it does not claim a live 289-to-zero turn because that
 profile exposed only one of the 289 skills found by the separate discovery
 inventory.
+
+For branch E2E compatibility probes, use an isolated neutral CWD whose local
+`.omp/config.yml` does not narrow `skills.includeSkills`. A project-local CWD
+that intentionally filters skills should be probed separately and must remain
+filtered rather than being expanded by progressive routing.
 
 Use a fixed prompt, model, CWD, and fresh ephemeral session for operational
 comparisons:

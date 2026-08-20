@@ -44,7 +44,7 @@
 - Consumes: OMP `before_agent_start` `systemPrompt: string[]`.
 - Produces: `parseSkillCatalog(systemPrompt: readonly string[]): ParsedSkillCatalog | undefined`.
 - Produces: `ParsedSkillCatalog.render(selectedNames: ReadonlySet<string>): string[]`.
-- Produces: `SkillCatalogEntry { name: string; description: string; line: string }`.
+- Produces: `SkillCatalogEntry { name: string; description: string; line: string }`, where `line` preserves the complete original entry block.
 
 - [ ] **Step 1: Write failing parser tests**
 
@@ -118,8 +118,8 @@ Implementation rules:
 - parse each interior line with `/^- ([^:\n]+): (.+)$/`;
 - reject blank, duplicate, or malformed names;
 - reject zero entries;
-- capture each full original line;
-- render by filtering original lines in original order;
+- capture each full original entry block;
+- render by filtering original entry blocks in original order;
 - return copied prompt arrays and never mutate the event input.
 
 - [ ] **Step 4: Run focused tests and typecheck**
@@ -511,3 +511,63 @@ Add:
 - known cost/latency trade-off of the dedicated routing call.
 
 Keep the PR draft until review findings and all gates pass.
+
+---
+
+### Task 7: Custom-Prompt Catalog Compatibility Correction
+
+**Files:**
+- Modify: `extensions/oh-my-omp/skill-routing/catalog.ts`
+- Modify: `test/skill-routing.test.ts`
+- Modify: `docs/superpowers/specs/2026-08-19-progressive-skill-routing-design.md`
+- Modify: `docs/superpowers/plans/2026-08-19-progressive-skill-routing.md`
+- Modify: `docs/harness-overview.md`
+
+**Interfaces:**
+- Preserve the current `parseSkillCatalog(systemPrompt)` API.
+- Generalize each `SkillCatalogEntry` from a single original line to an
+  original entry block while retaining `name` and `description`.
+- Accept both OMP's standard list catalog and its custom-system-prompt XML
+  catalog without changing discovery, `skill://`, configuration, or fallback.
+
+- [ ] **Step 1: Add failing XML regressions**
+
+Add a realistic custom-system-prompt fixture containing multiple
+`<skill name="...">...</skill>` blocks. Assert exact rendering, ordering,
+multiline description preservation, empty selection, mixed-format rejection,
+malformed/nested/unterminated XML rejection, and duplicate-name rejection.
+
+- [ ] **Step 2: Run the focused test and confirm RED**
+
+Run: `bun test test/skill-routing.test.ts`
+
+Expected: the XML compatibility test fails because the parser only accepts
+single-line list entries.
+
+- [ ] **Step 3: Implement the byte-preserving dual parser**
+
+Parse one homogeneous catalog form at a time. Capture each original entry as a
+complete block, validate names and non-empty descriptions, and render by
+filtering those original blocks in catalog order. Any ambiguity or malformed
+input returns `undefined`, preserving the existing full-catalog fallback.
+
+- [ ] **Step 4: Synchronize operator documentation**
+
+Document both supported OMP catalog renderings and require branch E2E probes to
+run from an isolated CWD whose local `.omp/config.yml` does not narrow
+`skills.includeSkills`; separately confirm intentionally filtered project CWDs
+remain filtered rather than expanded.
+
+- [ ] **Step 5: Verify the correction**
+
+Run focused tests and typecheck, then the full release gates and matching
+EvalFly smoke evidence. In Herdr, exercise a neutral-CWD session with the
+branch extension and confirm a routed skill remains readable; also confirm a
+project-local filtered catalog remains filtered rather than being expanded.
+
+- [ ] **Step 6: Review, commit, and push atomically**
+
+Run the task-scoped review and final whole-branch review. Commit the parser,
+regression tests, synchronized spec/plan/docs, and evidence contract as one
+corrective unit with `Spec-Slice: SPEC-20260820-SKILL-ROUTING-XML`; push only
+through the consent-gated push workflow.

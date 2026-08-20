@@ -25,6 +25,21 @@ const SYSTEM_PROMPT = [
 	"PROJECT CONTEXT",
 ];
 
+const XML_SYSTEM_PROMPT = [
+	[
+		"ROLE",
+		"<skills>",
+		'<skill name="diagnose">Diagnose failures before editing.',
+		"Use before changing code.",
+		"</skill>",
+		'<skill name="git-master">Handle every git operation.</skill>',
+		'<skill name="review-work">Review completed implementation.</skill>',
+		"</skills>",
+		"TOOLS",
+	].join("\n"),
+	"PROJECT CONTEXT",
+];
+
 describe("skill catalog parsing", () => {
 	test("renders selected original lines and preserves every other byte", () => {
 		const catalog = parseSkillCatalog(SYSTEM_PROMPT);
@@ -73,6 +88,76 @@ describe("skill catalog parsing", () => {
 				line: "- review-work: Review completed implementation.",
 			},
 		]);
+	});
+
+	test("renders selected XML blocks in catalog order without byte drift", () => {
+		const catalog = parseSkillCatalog(XML_SYSTEM_PROMPT);
+
+		expect(catalog).toBeDefined();
+		expect(catalog?.entries).toEqual([
+			{
+				name: "diagnose",
+				description: "Diagnose failures before editing.\nUse before changing code.",
+				line: [
+					'<skill name="diagnose">Diagnose failures before editing.',
+					"Use before changing code.",
+					"</skill>",
+				].join("\n"),
+			},
+			{
+				name: "git-master",
+				description: "Handle every git operation.",
+				line: '<skill name="git-master">Handle every git operation.</skill>',
+			},
+			{
+				name: "review-work",
+				description: "Review completed implementation.",
+				line: '<skill name="review-work">Review completed implementation.</skill>',
+			},
+		]);
+		expect(catalog?.render(new Set(["git-master", "diagnose"]))).toEqual([
+			[
+				"ROLE",
+				"<skills>",
+				'<skill name="diagnose">Diagnose failures before editing.',
+				"Use before changing code.",
+				"</skill>",
+				'<skill name="git-master">Handle every git operation.</skill>',
+				"</skills>",
+				"TOOLS",
+			].join("\n"),
+			"PROJECT CONTEXT",
+		]);
+		expect(XML_SYSTEM_PROMPT[0]).toContain('<skill name="review-work">');
+	});
+
+	test("renders an empty XML catalog selection without changing surrounding bytes", () => {
+		const catalog = parseSkillCatalog(XML_SYSTEM_PROMPT);
+
+		expect(catalog?.render(new Set())).toEqual([
+			["ROLE", "<skills>", "</skills>", "TOOLS"].join("\n"),
+			"PROJECT CONTEXT",
+		]);
+	});
+
+	test.each([
+		[
+			"mixed list and XML entries",
+			["<skills>\n- a: A.\n<skill name=\"b\">B.</skill>\n</skills>"],
+		],
+		["malformed XML entry", ["<skills>\n<skill>A.</skill>\n</skills>"]],
+		[
+			"nested XML entry",
+			["<skills>\n<skill name=\"a\">A <skill name=\"b\">B.</skill></skill>\n</skills>"],
+		],
+		["unterminated XML entry", ["<skills>\n<skill name=\"a\">A.\n</skills>"]],
+		[
+			"duplicate XML name",
+			["<skills>\n<skill name=\"a\">A.</skill>\n<skill name=\"a\">Again.</skill>\n</skills>"],
+		],
+		["empty XML description", ["<skills>\n<skill name=\"a\"></skill>\n</skills>"]],
+	])("rejects %s", (_name, prompt) => {
+		expect(parseSkillCatalog(prompt)).toBeUndefined();
 	});
 
 	test.each([

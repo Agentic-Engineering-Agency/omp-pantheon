@@ -53,13 +53,22 @@ A pure parser and renderer for the existing OMP `<skills>` block.
 It accepts the complete `string[]` system prompt supplied to `before_agent_start` and returns:
 
 - the exact first-segment prefix before `<skills>`;
-- ordered `{ name, description, line }` entries;
+- ordered `{ name, description, line }` entries, where `line` preserves the complete original entry block for API compatibility;
 - the exact suffix after `</skills>`;
 - untouched remaining system-prompt segments.
 
-Parsing is fail-closed for compaction: missing markers, nested markers, malformed entries, duplicate names, or an empty catalog produce an unusable result. The caller then returns the original prompt.
+OMP has two supported catalog renderings: the standard single-line
+`- name: description` form and the custom-system-prompt XML form
+`<skill name="name">...description...</skill>`. The parser accepts either
+homogeneous form and preserves each complete original entry block. It rejects
+mixed forms, malformed or nested XML, duplicate names, missing markers, and an
+empty catalog. The caller then returns the original prompt.
 
-Rendering reuses the original catalog lines rather than reconstructing descriptions. This preserves names, punctuation, provider order, and description bytes.
+Branch E2E compatibility probes must run from a neutral isolated CWD whose
+local `.omp/config.yml` does not narrow `skills.includeSkills`; otherwise the
+probe is measuring project-local skill filtering, not parser compatibility.
+
+Rendering reuses the original catalog blocks rather than reconstructing descriptions. This preserves names, punctuation, provider order, descriptions, and all surrounding bytes.
 
 ### `skill-routing/router.ts`
 
@@ -172,11 +181,12 @@ The handler must derive its input from `event.systemPrompt`; it must not scan sk
 
 ### Unit contracts
 
-- Parse and render a realistic catalog without byte drift.
-- Reject malformed, duplicate, nested, missing, and empty catalog structures.
+- Parse and render a realistic standard list catalog without byte drift.
+- Parse and render the custom-system-prompt XML catalog without byte drift.
+- Reject mixed line/XML catalogs and malformed, nested, or unterminated XML entries.
 - Preserve every system-prompt byte outside `<skills>`.
-- Preserve original catalog ordering and line bytes.
-- Accept only strict, certain, known-name router responses.
+- Preserve original catalog ordering and entry bytes.
+- Reject malformed, duplicate, nested, missing, and empty catalog structures.
 - Accumulate selected skills across turns without duplicates.
 - Return the original prompt for every failure class.
 - Emit metadata-only logs.
@@ -187,6 +197,10 @@ The handler must derive its input from `event.systemPrompt`; it must not scan sk
 - Confirm `resources_discover` still exposes the same Pantheon skills directory.
 - Confirm selected skills remain readable through the unchanged active skill registry.
 - Confirm manual skill commands are unaffected.
+
+- Run branch E2E probes from a neutral CWD with no local `.omp/config.yml`
+  `skills.includeSkills` narrowing, then separately confirm a deliberately
+  filtered project CWD remains filtered rather than expanded by routing.
 
 ### Evaluation evidence
 

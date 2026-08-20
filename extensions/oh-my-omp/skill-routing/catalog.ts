@@ -9,7 +9,9 @@ export interface ParsedSkillCatalog {
 	render(selectedNames: ReadonlySet<string>): string[];
 }
 
-const ENTRY_PATTERN = /^- ([^:\n]+): (.+)$/;
+const LIST_ENTRY_PATTERN = /^- ([^:\n]+): (.+)$/;
+const XML_ENTRY_OPEN_PATTERN = /^<skill name="([^"\n]+)">(.*)$/;
+const XML_ENTRY_CLOSE = "</skill>";
 
 export function parseSkillCatalog(
 	systemPrompt: readonly string[],
@@ -39,10 +41,34 @@ export function parseSkillCatalog(
 		return undefined;
 	}
 
+	const interiorLines = lines.slice(openingIndex + 1, closingIndex);
+	const entries = parseListEntries(interiorLines) ?? parseXmlEntries(interiorLines);
+	if (entries === undefined) return undefined;
+
+	if (entries.length === 0) return undefined;
+	return {
+		entries,
+		render(selectedNames) {
+			const selectedBlocks = entries
+				.filter((entry) => selectedNames.has(entry.name))
+				.map((entry) => entry.line);
+			const rendered = [
+				...lines.slice(0, openingIndex + 1),
+				...selectedBlocks,
+				...lines.slice(closingIndex),
+			].join("\n");
+			const result = [...systemPrompt];
+			result[0] = rendered;
+			return result;
+		},
+	};
+}
+
+function parseListEntries(lines: readonly string[]): SkillCatalogEntry[] | undefined {
 	const entries: SkillCatalogEntry[] = [];
 	const names = new Set<string>();
-	for (const line of lines.slice(openingIndex + 1, closingIndex)) {
-		const match = ENTRY_PATTERN.exec(line);
+	for (const line of lines) {
+		const match = LIST_ENTRY_PATTERN.exec(line);
 		if (!match) return undefined;
 
 		const name = match[1];
@@ -52,23 +78,81 @@ export function parseSkillCatalog(
 		names.add(name);
 		entries.push({ name, description, line });
 	}
+	return entries;
+}
 
-	if (entries.length === 0) return undefined;
+function parseXmlEntries(lines: readonly string[]): SkillCatalogEntry[] | undefined {
+	const entries: SkillCatalogEntry[] = [];
+	const names = new Set<string>();
 
-	return {
-		entries,
-		render(selectedNames) {
-			const selectedLines = entries
-				.filter((entry) => selectedNames.has(entry.name))
-				.map((entry) => entry.line);
-			const rendered = [
-				...lines.slice(0, openingIndex + 1),
-				...selectedLines,
-				...lines.slice(closingIndex),
-			].join("\n");
-			const result = [...systemPrompt];
-			result[0] = rendered;
-			return result;
-		},
-	};
+	for (let index = 0; index < lines.length; index++) {
+		const openingLine = lines[index];
+		if (openingLine === undefined) return undefined;
+
+		const match = XML_ENTRY_OPEN_PATTERN.exec(openingLine);
+		if (!match) return undefined;
+
+		const name = match[1];
+		const openingDescription = match[2];
+		if (
+			name === undefined ||
+			openingDescription === undefined ||
+			name === "" ||
+			names.has(name)
+		) {
+			return undefined;
+		}
+
+		const blockLines = [openingLine];
+		const descriptionLines: string[] = [];
+		const closeInOpening = openingDescription.indexOf(XML_ENTRY_CLOSE);
+		if (closeInOpening >= 0) {
+			const description = openingDescription.slice(0, closeInOpening);
+			const trailing = openingDescription.slice(
+				closeInOpening + XML_ENTRY_CLOSE.length,
+			);
+			if (
+				trailing !== "" ||
+				description.length === 0 ||
+				description.includes("<skill")
+			) {
+				return undefined;
+			}
+
+			names.add(name);
+			entries.push({ name, description, line: blockLines.join("\n") });
+			continue;
+		}
+
+		if (openingDescription.includes("<skill")) return undefined;
+		if (openingDescription.length > 0) descriptionLines.push(openingDescription);
+
+		let closed = false;
+		while (++index < lines.length) {
+			const line = lines[index];
+			if (line === undefined) return undefined;
+			blockLines.push(line);
+
+			const closeIndex = line.indexOf(XML_ENTRY_CLOSE);
+			if (closeIndex >= 0) {
+				const beforeClose = line.slice(0, closeIndex);
+				const afterClose = line.slice(closeIndex + XML_ENTRY_CLOSE.length);
+				if (afterClose !== "" || beforeClose.includes("<skill")) return undefined;
+				if (beforeClose.length > 0) descriptionLines.push(beforeClose);
+				closed = true;
+				break;
+			}
+
+			if (line.includes("<skill")) return undefined;
+			descriptionLines.push(line);
+		}
+
+		const description = descriptionLines.join("\n");
+		if (!closed || description.length === 0) return undefined;
+
+		names.add(name);
+		entries.push({ name, description, line: blockLines.join("\n") });
+	}
+
+	return entries;
 }
