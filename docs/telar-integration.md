@@ -18,12 +18,14 @@ modelos: está en reanudar una sesión OMP persistida, entregar trabajo con jour
 fencing, evitar la repetición de efectos ambiguos, invalidar evidencia obsoleta y permitir el
 éxito sólo cuando todos los gates requeridos son actuales.
 
-La recomendación provisional es mantener los tres sistemas separados:
+La recomendación provisional es mantener los cuatro productos separados:
 
-- **Telar** es dueño de los contratos portables `feature`, `slice`, `release` y `project`, así
-  como del paquete de diseño y sus decisiones humanas.
-- **Ultimate Harness** es dueño de Run Control: routing económico, asignación de identidad y
-  modelo, budgets, ledger agregado, revisión multimodelo, juez y métricas operativas.
+- **Telar** es dueño de los contratos portables `feature`, `slice`, `release` y `project`, del
+  paquete de diseño, intención de negocio, política económica y de calidad, identidad estable,
+  autoridad humana, ledger normalizado, política de revisión/juez e interpretación de métricas.
+- **Ultimate Harness** es el único Run Control: resuelve la ruta live dentro de la política Telar,
+  vincula el modelo/runtime real al intento, aplica límites operativos, ejecuta fallbacks,
+  sandboxes, revisión/integración y devuelve receipts inmutables.
 - **SpecSafe** sigue siendo repo-local y dueño del ciclo de slice, TDD y QA.
 - **Pantheon** ejecuta una asignación ya resuelta sobre OMP y emite eventos y referencias de
   evidencia. No decide el contrato, el modelo, el budget ni la autoridad de release.
@@ -32,6 +34,20 @@ No conviene mergear Pantheon con Telar ni presentar sus agentes Markdown como el
 del sistema. Tampoco conviene extraer todavía un paquete compartido: con un solo Adapter real, esa
 abstracción sería hipotética. La extracción se justifica cuando un segundo ejecutor demuestre el
 mismo Interface.
+
+### Vocabulario canónico
+
+| Término | Significado | Producto |
+|---|---|---|
+| Execution Harness | Substrato que hospeda sesiones, providers, tools y trayectorias nativas. | OMP en este lane. |
+| Meta Harness | Único Run Control cross-harness que resuelve y supervisa intentos live. | Ultimate Harness. |
+| Orchestrator | Intención de negocio, lifecycle policy, identidad estable, autoridad, ledger normalizado y learning gobernado. | Telar; nunca lanza o reintenta un intento live. |
+| Repo-local Assurance | Readiness, trace, TDD, verify, QA y completion local. | SpecSafe. |
+| OMP Execution Adapter | Traducción y ejecución durable específica de OMP detrás del seam de UH. | OMP Pantheon. |
+
+“Cellar” es un error de transcripción de **Telar**. Meta Harness es una
+capacidad de UH, no un quinto producto; Orchestrator no significa un segundo
+Run Control.
 
 ## Alcance y base de evidencia
 
@@ -72,14 +88,14 @@ flowchart LR
     T --> U[Ultimate Harness Run Control]
     H --> U
     U -->|ExecutionRequest and controls| P[Pantheon OMP Adapter]
-    P -->|resolved identity and model| O[OMP runtime]
+    P -->|resolved attempt binding| O[OMP runtime]
     O -->|durable session and tool effects| P
     S[SpecSafe repo-local TDD and QA] -->|closure receipt| P
     E[EvalFly local evaluation] -->|report reference| P
-    P -->|ordered ExecutionEvents| L[Ultimate Harness ledger]
-    L --> U
+    P -->|ordered ExecutionEvents + native refs| U
+    U -->|delivery exchange envelope| L[Telar normalized ledger]
     U -->|gate decision or next assignment| P
-    L --> D[DORA and learning loop]
+    L --> D[External metrics + governed learning]
 ```
 
 El diagrama expresa autoridad, no despliegue. Pantheon puede correr en el mismo host que OMP, pero
@@ -159,7 +175,7 @@ EvalFly y el ledger de refinamiento son buenos seams para un learning loop: uno 
 y el otro exige validación y aprobación antes de activar una mejora. La promoción automática de
 trazas a evals, el muestreo, la separación hidden/development y la atribución de resultado todavía
 faltan. Pantheon no calcula DORA; esas métricas requieren eventos de Git, CI y despliegue que deben
-correlacionarse en el ledger superior.
+correlacionarse en el ledger normalizado de Telar.
 
 ## Matriz de capacidades frente al sistema deseado
 
@@ -167,18 +183,18 @@ correlacionarse en el ledger superior.
 |---|---|---|---|
 | Contratos `feature/slice/release/project` | `/autonomy` recibe una tarea textual y un objetivo exacto | Ausente | Telar |
 | Paquete de diseño | Skills y prompts pueden producir artefactos, sin contrato canónico | Ausente | Telar |
-| Routing económico y multimodelo | Listas de modelos en personas; retry/fallback de OMP observado | Parcial, no gobernado | Ultimate Harness |
-| Identidad separada de modelo/fallback | Traza distingue agente y modelo; la persona aún prescribe modelos | Parcial | Ultimate Harness; Pantheon reporta la resolución |
-| Ledger trazable | Journals operacionales y receipts checksummed | Nativo local, no agregado | Ultimate Harness agrega; Pantheon emite eventos |
-| Gates programáticos | Goal, comando host, EvalFly y SpecSafe con frescura | Nativo y profundo | Pantheon ejecuta; Ultimate Harness compone política |
-| Gates humanos | `--i-approve` y `/refinement` cubren casos estrechos | Parcial | Telar/Ultimate Harness decide; Pantheon consume decisión |
+| Routing económico y multimodelo | Listas de modelos en personas; retry/fallback de OMP observado | Parcial, no gobernado | Telar define política; Ultimate Harness resuelve/ejecuta; Pantheon reporta |
+| Identidad separada de modelo/fallback | Traza distingue agente y modelo; la persona aún prescribe modelos | Parcial | Telar mantiene identidad estable; UH vincula el intento; Pantheon reporta la ruta observada |
+| Ledger trazable | Journals operacionales y receipts checksummed | Nativo local, no agregado | Telar normaliza referencias; UH y Pantheon conservan receipts nativos |
+| Gates programáticos | Goal, comando host, EvalFly y SpecSafe con frescura | Nativo y profundo | Telar compone política; SpecSafe evalúa local; UH/Pantheon ejecutan controles permitidos |
+| Gates humanos | `--i-approve` y `/refinement` cubren casos estrechos | Parcial | Telar conserva autoridad; UH/Pantheon consumen una decisión atribuida |
 | TDD/QA repo-local | Skill, estado y receipts SpecSafe | Nativo como port | SpecSafe |
 | Persistencia hasta Definition of Done | Reanudación durable, intentos acotados y gates | Parcial | Ultimate Harness controla; Pantheon ejecuta |
-| Revisión multimodelo | Personas y prompts por modelo | Parcial, no demostrada | Ultimate Harness |
-| Juez con contexto mínimo | No hay bundle mínimo ni juez aislado; LLM/human EvalFly no ejecutan | Ausente | Ultimate Harness |
-| Budgets | `maxAttempts`; coste/tokens sólo metadata incompleta | Parcial | Ultimate Harness |
-| DORA | Sin cálculo ni fuentes de deploy | Ausente | Ledger/analytics superior |
-| Learning loop | EvalFly más refinamiento aprobado | Parcial, manual | Ultimate Harness coordina; Pantheon conserva refinamiento local |
+| Revisión multimodelo | Personas y prompts por modelo | Parcial, no demostrada | Telar define independencia; UH ejecuta misiones; Pantheon puede ser Adapter |
+| Juez con contexto mínimo | No hay bundle mínimo ni juez aislado; LLM/human EvalFly no ejecutan | Ausente | Telar define policy; SpecSafe compila contexto; UH ejecuta |
+| Budgets | `maxAttempts`; coste/tokens sólo metadata incompleta | Parcial | Telar autoriza; UH aplica límites live; Pantheon aplica sólo capacidades probadas |
+| DORA | Sin cálculo ni fuentes de deploy | Ausente | Sistemas externos calculan; Telar correlaciona/interpreta |
+| Learning loop | EvalFly más refinamiento aprobado | Parcial, manual | Telar gobierna propuestas; Pantheon conserva refinamiento local aprobado |
 | Checkpoints de kernel | Backend definido, stock OMP unsupported | Hipotético | Futuro Adapter, sólo si OMP ofrece Seam público |
 | Retained agents | Backend definido, stock OMP unsupported | Hipotético | Futuro Adapter, sólo si OMP ofrece Seam público |
 
@@ -287,7 +303,7 @@ rutas privadas ni el contenido completo de sesiones.
 | `executionId` y snapshot | `AutonomyRun.id` y store | Fachada estable sin exponer rutas privadas |
 | Objetivo y DoD | `task`, native goal y gates | Traducir contrato por nivel a objetivo/gates sin perder su hash |
 | Controles | métodos start/pause/resume/cancel | Entrada externa autenticada y eventos correlacionados |
-| Eventos de entrega | journal, scheduler y terminal intent | Proyección append-only al ledger superior |
+| Eventos de entrega | journal, scheduler y terminal intent | Proyección append-only, vía UH, al ledger normalizado de Telar |
 | Evidencia | gate records y receipts | Envelope portable con digest y referencia |
 | Identidad/modelo | agente Markdown y modelo observado | Recibir asignación externa; retirar la lista de fallback como autoridad |
 | Límites | `maxAttempts` | Telemetría/enforcement de tiempo, tokens y coste |
@@ -305,7 +321,8 @@ rutas privadas ni el contenido completo de sesiones.
 
 ## Recomendación provisional
 
-1. Definir primero el contrato Telar y el envelope de ejecución/ledger de Ultimate Harness.
+1. Definir primero el contrato de lifecycle/ledger de Telar y el envelope de ejecución de
+   Ultimate Harness.
 2. Crear después una fachada de Pantheon que implemente ese Interface usando `AutonomyRuntime`,
    sin exportar store, journal, scheduler ni archivos de sesión.
 3. Mantener SpecSafe como autoridad repo-local; Pantheon sólo consume su receipt canónico.
@@ -313,11 +330,34 @@ rutas privadas ni el contenido completo de sesiones.
    ejecutable. No usar su schema como prueba de capacidad.
 5. Mover la autoridad de modelos/fallback fuera de las personas Pantheon. Las personas pueden
    seguir siendo instrucciones, pero reciben un `modelBinding` resuelto.
-6. Proyectar eventos Pantheon al ledger superior; no convertir sus archivos privados en el ledger
-   portable.
+6. Proyectar eventos Pantheon, a través de UH, al ledger normalizado de Telar; no convertir sus
+   archivos privados en el ledger portable.
 7. Conservar el refinement ledger como Module opcional y separado. Integrarlo al learning loop
    mediante referencias de evidencia y aprobación humana, no mediante activación automática.
 8. Probar el Interface con un segundo executor antes de extraer un módulo compartido.
+
+## Plan operativo futuro
+
+Pantheon profundiza únicamente el OMP Execution Adapter. El plan no añade
+policy, ledger o lifecycle global dentro de este repo.
+
+| Área | Interface y seam | Owner / Adapter | Gate y evidencia | Seguridad / deletion test |
+|---|---|---|---|---|
+| Interface portable | `describe`, `execute`, `inspect` y `collect` en el seam UH-to-OMP. | UH posee el contrato de conformidad del Run Control; Pantheon posee la Implementation OMP. | Request idempotente, capabilities versionadas, stream ordenado, snapshot y terminal receipt. | Ningún caller importa store, journal, scheduler, session paths o API privada de OMP. |
+| Ejecución y lifecycle | Traducir un binding ya autorizado a objetivo, sesión, controles y gates OMP. | Telar gobierna lifecycle; UH es el único Run Control; Pantheon reanuda y ejecuta OMP. | Leases, fencing, revisión de artefacto, gate freshness, cancelación y `dispatched -> uncertain` sin replay. | Borrar Pantheon debe obligar a reconstruir semántica OMP en UH; si sólo borra forwarding, el Adapter es demasiado superficial. |
+| Economics | Consumir límites resueltos y emitir uso real disponible. | Telar autoriza policy/budget; UH resuelve y aplica; Pantheon aplica sólo `maxAttempts` u otra capacidad probada. | Requested/actual route, tokens/coste con unidades y fuente, fallback/desviación, y `unknown` explícito. | Pantheon nunca inventa coste, cuota, modelo o channel ni rebaja calidad por precio. |
+| Observabilidad | Convertir eventos nativos en referencias allowlisted. | Pantheon conserva journals/receipts locales; UH agrega evidencia operacional; Telar normaliza el ledger. | Producer sequence, attempt, artifact revision, digest, reporter, freshness y redaction class. | Prompts, razonamiento, secrets, rutas privadas y dumps de sesión no cruzan el seam. |
+| Identidad | Separar `agentId` estable de `modelBinding` y de IDs de sesión OMP. | Telar mantiene identidad estable; UH vincula run/attempt y ruta; Pantheon reporta el modelo observado. | Cada fallback preserva `agentId` y emite la nueva ruta real o una violación de policy. | Persona Markdown o modelo solicitado no prueban el modelo efectivo. |
+| Assurance y review | Consumir requisitos/receipts SpecSafe y ejecutar sólo gates asignados. | SpecSafe es autoridad repo-local; Telar define review/judge policy; UH ejecuta misiones; Pantheon reporta. | RED/mínimo/GREEN/refactor, candidate digest, reviewer independence, judge envelope, human decision. | Un pass local no significa release; evidencia stale, reporter inválido o reviewer no independiente bloquea/inconclusive. |
+| Learning | Exportar evidencia/refinement refs sin activación autónoma. | Telar gobierna propuestas cross-project; el owner del artifact publica; Pantheon conserva su refinement Module local. | Evidence window, hypothesis, candidate hash, validación, aprobación humana, activación, rollback y cuarentena. | Ningún evento de ejecución edita personas, skills, policy, tests o sesiones activas automáticamente. |
+| Security | Aceptar controles autenticados y aplicar bounds explícitos. | Telar define autoridad; UH valida scope/receipt; Pantheon protege runtime y estado privado. | Actor, request digest, scope, nonce/expiry, controls, allowed effects, cancel/pause y uncertainty resolution. | Authorization stale/forged, ID/hash mismatch, secret/path leakage o ambiguous replay falla cerrado. |
+| Evolución | Validar el seam con conformance fixtures antes de compartir código. | Pantheon es primer Adapter OMP; se necesita un executor no-OMP real. | Dos workflows, segundo Adapter y dos ciclos compatibles antes de package común. | Si borrar el package futuro sólo borra types copiados y no redistribuye complejidad, no extraerlo. |
+
+La primera vertical autorizada es no productiva y debe incluir un caso positivo y
+uno negativo de `uncertain`, evidencia stale o fallback fuera de policy. Deploy,
+efectos destructivos y migración productiva requieren un runbook aprobado por
+separado. La sección [Deletion test](#deletion-test) sigue siendo el criterio de
+admisión para cada nuevo Module o Adapter.
 
 ## Riesgos
 
@@ -326,28 +366,28 @@ rutas privadas ni el contenido completo de sesiones.
 | Acoplamiento a versiones de OMP | Cambio de eventos o sesión rompe el Adapter | `describe()` con capabilities y suite de conformidad por versión |
 | Doble autoridad de routing | Persona y Ultimate Harness eligen modelos distintos | `modelBinding` resuelto y evento de desviación/fallback |
 | Dos SpecSafe divergentes | Slice, costes o receipts inconsistentes | Una sola autoridad repo-local; Pantheon sólo adapta el estado canónico |
-| Ledger fragmentado | No se puede reconstruir una decisión end-to-end | Secuencias correlacionadas y referencias con digest en el ledger superior |
+| Ledger fragmentado | No se puede reconstruir una decisión end-to-end | Secuencias correlacionadas y referencias con digest en el ledger normalizado de Telar |
 | Repetición después de fallo ambiguo | Efectos externos duplicados | Preservar `dispatched -> uncertain`, con resolución humana explícita |
 | Falsa capacidad multimodelo | Prompts etiquetados se confunden con revisión independiente | Conformance test de fan-out, aislamiento, adjudicación y modelo observado |
 | Fuga de estado privado | Sesiones, prompts o rutas llegan al ledger | Allowlist de campos y referencias opacas; nunca copiar journals crudos |
-| Gates demasiado locales | Un test repo-local se interpreta como aprobación de release | Política de composición en Ultimate Harness y autoridad de release en Telar |
+| Gates demasiado locales | Un test repo-local se interpreta como aprobación de release | Política de composición y autoridad de release en Telar; enforcement mecánico en UH |
 | Budgets declarados pero no aplicados | Ejecución excede coste o tokens | Capabilities explícitas; enforcement central hasta tener Adapter verificable |
 
 ## Preguntas abiertas antes de una ADR
 
-1. ¿Telar es dueño del schema completo del contrato o sólo de su parte de producto, dejando el
-   envelope de ejecución a Ultimate Harness?
+1. ¿Qué campos exactos pertenecen al contrato lifecycle/ledger de Telar y cuáles al envelope de
+   Run Control/Execution Adapter de Ultimate Harness, sin duplicar autoridad?
 2. ¿Ultimate Harness ya tiene un Interface de eventos/evidencia que deba adoptarse en lugar del
    bosquejo anterior?
-3. ¿Pantheon debe recibir siempre un modelo resuelto o puede recibir una política cuando OMP sea
-   el router autorizado para una ejecución concreta?
+3. ¿Cómo debe reportar Pantheon un fallback nativo de OMP: como una resolución permitida por UH o
+   como desviación bloqueante cuando no aparece en la cadena autorizada?
 4. ¿Qué gates humanos requieren identidad autenticada, doble aprobación o caducidad?
 5. ¿Cuál es la fuente canónica de SpecSafe durante la migración y cómo se elimina el port
    duplicado sin romper receipts existentes?
 6. ¿Quién resuelve un comando `uncertain`, y puede esa resolución permitir continuar sin ocultar
    la ambigüedad al release gate?
-7. ¿EvalFly seguirá siendo un productor local de evidencia o su formato será reemplazado por el
-   ledger de Ultimate Harness?
+7. ¿Qué subset de EvalFly seguirá siendo evidencia local y qué referencias normaliza Telar sin
+   copiar traces privados?
 8. ¿Qué fuentes de Git, CI y despliegue alimentarán DORA y cómo se correlacionarán con
    `executionId` y contract ref?
 9. ¿Qué segundo executor se usará para demostrar que el Interface es portable antes de extraer un
@@ -358,8 +398,8 @@ rutas privadas ni el contenido completo de sesiones.
 
 Esta propuesta está lista para convertirse en ADR sólo cuando:
 
-- Telar y Ultimate Harness confirmen una sola autoridad por contrato, routing, budget, ledger y
-  release;
+- Telar conserve intención, policy, identidad estable, budget authority, ledger y release;
+- Ultimate Harness conserve resolución live y ejecución como único Run Control;
 - exista un schema versionado de request, control, evento y evidencia;
 - Pantheon pruebe reanudación, invalidación de gates, no-replay y proyección de eventos contra ese
   schema;

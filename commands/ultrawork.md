@@ -306,12 +306,13 @@ Test-first is not optional. Every behavior change — features, fixes, refactors
 
 Trigger when ANY apply: task touches 3+ files OR ran 20+ turns OR 30+ minutes; refactor / migration / perf / security work; user explicitly requests rigorous review.
 
-Procedure (non-negotiable):
+Procedure (non-negotiable, bounded):
 1. Spawn a reviewer via `task(agent: "oracle", tasks: [{ id: "review", description: "Rigorous review", assignment: "<goal + scenarios + evidence + diff + notepad path>" }])`.
 2. Reviewer verdict is BINDING. There is no "false positive". Do not argue, minimise, or explain away.
 3. Fix every concern. Re-run the FULL scenario QA. Capture fresh evidence. Update notepad.
-4. Re-submit to the SAME reviewer. Loop until UNCONDITIONAL approval. "looks good but..." = REJECTION.
-5. Only on unconditional approval may you declare done.
+4. Re-submit to the SAME reviewer. Loop is bounded by the `review-budget-guard` skill: **max two review cycles per PR**, one review per exact SHA, and never a third reviewer.
+5. If the second cycle still finds P0/P1 blockers, STOP and escalate to a human with the findings list and branch head — do not cycle again. P2/P3 findings become follow-up tickets unless they violate a named release invariant.
+6. Only on unconditional approval may you declare done.
 
 ## ZERO TOLERANCE FAILURES
 - **NO Scope Reduction**: Never make "demo", "skeleton", "simplified", "basic" versions — deliver FULL implementation

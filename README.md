@@ -27,6 +27,13 @@ engineering cockpit: one that can coordinate specialized agents, remember
 project context, require eval evidence for load-bearing work, verify real user
 flows, and make it harder for an agent to simply say “done” without proof.
 
+Within the governed cross-product architecture, Pantheon has the narrower role
+of **OMP Execution Adapter**: OMP is the Execution Harness, Ultimate Harness is
+the sole Meta Harness / Run Control, Telar owns business intent, policy, stable
+identity, authority, and the normalized ledger, and SpecSafe remains repo-local
+assurance. See the [Telar integration boundary and future operating
+plan](./docs/telar-integration.md).
+
 ## Prime Agent-inspired verified autonomy
 
 Pantheon's autonomy layer adapts selected ideas from
@@ -245,6 +252,8 @@ explicitly activated per repo/session.
 
 - [Harness overview](./docs/harness-overview.md) — complete newcomer-oriented
   description of the architecture, differentiators, issue flow, and roadmap.
+- [Telar integration boundary](./docs/telar-integration.md) — Pantheon's OMP
+  Execution Adapter seam, ownership limits, deletion tests, and future plan.
 - [Verified autonomy](./docs/autonomy.md) — setup, commands, gates, worker and
   scheduler recovery, state paths, refinement, Python skills, and capability
   boundaries.
