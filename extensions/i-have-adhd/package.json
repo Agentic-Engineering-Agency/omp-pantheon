@@ -1,0 +1,13 @@
+{
+	"name": "i-have-adhd",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Session-persistent ADHD-friendly output mode for OMP",
+	"omp": {
+		"extensions": ["./index.ts"]
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit"
+	}
+}

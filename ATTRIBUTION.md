@@ -30,6 +30,12 @@ and concepts to OMP's native tool grammar.
   source code, notebook tool surface, daemon implementation, or Pi package is
   copied or vendored. Unsupported OMP capabilities are exposed as unsupported
   rather than emulated through private internals.
+- **i-have-adhd output mode:** `skills/i-have-adhd/` derives from
+  [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd), licensed **MIT**
+  (copyright Ayoub Ghriss). The skill text retains the upstream MIT license at
+  `skills/i-have-adhd/LICENSE`; `extensions/i-have-adhd/` is an original OMP
+  adaptation using only the public extension API.
+
 
 ## Grammar mapping (OMO → OMP)
 
