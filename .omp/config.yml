@@ -1,4 +1,5 @@
 disabledProviders:
+- agent-plugins
 - claude
 - claude-plugins
 - codex
@@ -30,6 +31,7 @@ skills:
   - handoff
   - write-docs
   - to-tickets
+  - log-eod
   - api-design
   - domain-modeling
   - tdd
