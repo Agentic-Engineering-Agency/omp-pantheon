@@ -30,6 +30,13 @@ and concepts to OMP's native tool grammar.
   source code, notebook tool surface, daemon implementation, or Pi package is
   copied or vendored. Unsupported OMP capabilities are exposed as unsupported
   rather than emulated through private internals.
+- **Agent-writing / context-load design inspiration:** the context-load,
+  context-pointer, and progressive-disclosure framing was studied from Matt
+  Pocock's
+  [Writing for Agents](https://github.com/mattpocock/skills/blob/main/docs/productivity/writing-for-agents.md),
+  licensed **MIT** (copyright Matt Pocock). Pantheon's runtime skill-catalog
+  parser and router are original TypeScript written against OMP's public SDK;
+  no source implementation is copied or vendored.
 - **i-have-adhd output mode:** `skills/i-have-adhd/` derives from
   [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd), licensed **MIT**
   (copyright Ayoub Ghriss). The skill text retains the upstream MIT license at

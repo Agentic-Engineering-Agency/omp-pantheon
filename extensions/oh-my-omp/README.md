@@ -11,6 +11,10 @@ the Seshat/SpecSafe runtime into the local harness.
 - Advertises this repository's bundled `skills/` directory via
   `resources_discover`; `install.sh` separately exposes the installed bundle
   beneath `~/.omp/agent/`.
+- Routes the active prompt through progressive skill disclosure: the active
+  model sees the complete discovered catalog, while execution receives only
+  cumulative selected entries. Any routing uncertainty or failure preserves
+  the exact original prompt and full catalog.
 - Owns the opt-in **verified autonomy runtime**: exact native OMP goal
   ownership, a fixed host-run verification command, bounded attempts,
   checksummed/CAS private state, and a run-scoped broker worker.

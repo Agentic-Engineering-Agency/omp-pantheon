@@ -10,6 +10,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@oh-my-pi/pi-ai": "17.2.14"
+  },
   "devDependencies": {
     "@oh-my-pi/pi-coding-agent": "^17.2.14",
     "typescript": "^6.0.3"

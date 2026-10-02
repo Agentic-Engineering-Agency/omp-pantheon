@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "oh-my-omp",
+      "dependencies": {
+        "@oh-my-pi/pi-ai": "17.2.14",
+      },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "^17.2.14",
         "typescript": "^6.0.3",
