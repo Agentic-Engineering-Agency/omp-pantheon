@@ -15,19 +15,6 @@ the Seshat/SpecSafe runtime into the local harness.
   model sees the complete discovered catalog, while execution receives only
   cumulative selected entries. Any routing uncertainty or failure preserves
   the exact original prompt and full catalog.
-- Owns the opt-in **verified autonomy runtime**: exact native OMP goal
-  ownership, a fixed host-run verification command, bounded attempts,
-  checksummed/CAS private state, and a run-scoped broker worker.
-- Stores objective state, executable worker commands, and schedules outside
-  the repository in a private per-user state directory; incomplete attempts
-  enqueue durable continuations, leases heartbeat, and terminal
-  `failed`/`uncertain` outcomes are not replayed indefinitely.
-- Registers `/autonomy` and the parameterless `autonomy_gate` verification
-  tool. See [`docs/autonomy.md`](../../docs/autonomy.md) for lifecycle, state,
-  security boundaries, and migration details.
-- Registers `refinement_preview`: agents prepare a session-scoped JSON
-  transaction from a candidate file, while only the interactive user input
-  `aprobar` records and activates the refinement.
 - Registers lifecycle guardrails: `todo-enforcer`, `comment-checker`, and
   `intent-gate`.
 
@@ -47,7 +34,7 @@ the Seshat/SpecSafe runtime into the local harness.
 
 ### Skills (`~/.omp/agent/skills/`)
 - Pantheon: `ai-slop-remover`, `dev-browser`, `frontend-ui-ux`, `git-master`,
-  `hyperplan`, `i-have-adhd`, `natural-refinement`, `playwright`,
+  `hyperplan`, `i-have-adhd`, `playwright`,
   `playwright-cli`, `remove-deadcode`, `review-work`, `security-research`,
   `tech-debt-audit`.
 - Seshat/SpecSafe: `bootstrap`, `coherence`, `docs`, `env-doctor`,
@@ -88,7 +75,7 @@ The OMO templates were adapted to OMP's tool grammar:
 | `LspFindReferences` | `lsp(action: "references")` |
 | `lsp_rename` | `lsp(action: "rename")` |
 | `ast_grep_search` / `ast_grep_replace` | `ast_grep` / `ast_edit` |
-| `background_output` / `background_cancel` | OMP's `task`/Hub lifecycle plus the verified `/autonomy` runtime provide bounded continuation and durable recovery. |
+| `background_output` / `background_cancel` | OMP's `task`/Hub lifecycle. |
 
 ## How it loads
 

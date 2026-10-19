@@ -17,6 +17,20 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
 - Hooks: `todo-enforcer`, `comment-checker`, `intent-gate`
 - Skills: `hyperplan`, `security-research`, `tech-debt-audit`, `remove-deadcode`
 
+## 2026-10-19 — Prime Agent integration removed
+
+- Removed `/autonomy`, `autonomy_gate`, the broker-managed `pantheon-agentd`
+  worker, and the autonomy store, journal, scheduler, gates, kernel-checkpoint
+  and retained-agent adapters.
+- Removed `/refinement`, `refinement_preview`, the `natural-refinement` skill,
+  and the refinement ledger.
+- Removed `/python-skill` and the isolated Python skill runner.
+- `specsafe end` no longer writes private closure receipts or recovers
+  interrupted closures; it records the slice history entry only.
+- Pantheon no longer writes private per-user state. Existing data can be
+  deleted manually: `${XDG_STATE_HOME:-~/.local/state}/omp-pantheon/` and any
+  project `.pi/refinement/` directory.
+
 ## 2026-08-11 — Prime Agent concepts adapted to OMP
 
 - Added opt-in `/autonomy` and `autonomy_gate`; removed the extension's
@@ -81,8 +95,8 @@ adds the roadmap iter-2/3/4 pieces, all re-adapted to OMP's tool grammar.
 Autonomy objective state, executable queues, crash-recoverable SpecSafe gate
 receipts, refinement rollback snapshots, and Python caches live in private
 per-user XDG state. Refinement history remains project-local under
-`.pi/refinement/`. See [`docs/autonomy.md`](./docs/autonomy.md) for setup,
-migration, recovery, and policy details.
+`.pi/refinement/`. The `docs/autonomy.md` guide covered setup, migration,
+recovery, and policy details until its removal on 2026-10-19.
 
 ## Upstream source map (`packages/omo-opencode/src/`)
 

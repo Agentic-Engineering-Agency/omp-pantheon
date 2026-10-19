@@ -3,24 +3,20 @@
  *
  * Responsibilities:
  *   - Advertise the bundled skills directory via `resources_discover`.
- *   - Register opt-in, gate-verified autonomy backed by native OMP goals.
- *   - Register lifecycle hooks for EvalFly, todos, comments, and intent.
+ *   - Register lifecycle hooks for EvalFly, todos, comments, intent, and
+ *     progressive skill routing.
  *   - Markdown commands, agents, and skills ship as files discovered by OMP.
  */
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
-import { registerAutonomy } from "./autonomy/runtime";
 import { registerEvalFlyEnforcementGate } from "./evalfly/enforcement-gate";
 import { registerEvalFlyTraceCapture } from "./evalfly/trace-buffer";
 import { registerCommentChecker } from "./hooks/comment-checker";
 import { registerEvalFlyAdvisor } from "./hooks/evalfly-advisor";
 import { registerIntentGate } from "./hooks/intent-gate";
 import { registerTodoEnforcer } from "./hooks/todo-enforcer";
-import { registerPythonSkillCommand } from "./python-skills/commands";
-import { registerRefinementCommand } from "./refinement/commands";
-import { registerNaturalRefinement } from "./refinement/natural";
 import { registerSkillRouting } from "./skill-routing/runtime";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -42,12 +38,6 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			skills: SKILLS_DIR,
 		});
 	});
-
-	// Verified autonomy: no state means no autonomous behavior.
-	registerAutonomy(pi);
-	registerRefinementCommand(pi);
-	registerNaturalRefinement(pi);
-	registerPythonSkillCommand(pi);
 
 	// Lifecycle hooks: advisory context plus discipline enforcement.
 	registerEvalFlyEnforcementGate(pi);
