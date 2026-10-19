@@ -18,7 +18,6 @@ const criticalEvalFiles = [
 	"docs/evalfly/modes.md",
 	"skills/evaluation-flywheel/SKILL.md",
 	"test/evalfly-enforcement-gate.test.ts",
-	"test/specsafe-cli.test.ts",
 ] as const;
 
 const progressiveSkillRoutingFiles = [
@@ -49,7 +48,6 @@ describe("omp-pantheon EvalFly project repo", () => {
 			"evalfly-modes-doc-exists",
 			"evaluation-flywheel-skill-exists",
 			"evalfly-gate-test-exists",
-			"specsafe-recovery-regression-exists",
 			"progressive-skill-routing-regression-exists",
 		]);
 

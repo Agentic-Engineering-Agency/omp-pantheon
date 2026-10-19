@@ -15,9 +15,6 @@ If you are arriving here from GitHub with no prior context:
   specialist agents, durable memory, SpecSafe/Seshat slice discipline, EvalFly
   evaluation evidence, local completion gates, trace hygiene, branch-level E2E
   verification, review protocols, and installable project templates.
-- **Verified autonomy** with native OMP goal gates, durable command/schedule
-  journals, a broker-managed resident worker, bounded retries, and recovery
-  across process restarts.
 - **The core differentiator:** most agent harnesses help an AI edit code; this
   harness tries to make agentic work *reviewable and enforceable* by tying it to
   contracts, evidence, reports, traces, and PASS/FAIL/INCONCLUSIVE verdicts.
@@ -33,31 +30,6 @@ the sole Meta Harness / Run Control, Telar owns business intent, policy, stable
 identity, authority, and the normalized ledger, and SpecSafe remains repo-local
 assurance. See the [Telar integration boundary and future operating
 plan](./docs/telar-integration.md).
-
-## Prime Agent-inspired verified autonomy
-
-Pantheon's autonomy layer adapts selected ideas from
-[Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)—long-running
-work, persistent goals, schedules, background continuity, continual harness
-refinement, and executable skills—into OMP-native, evidence-gated contracts:
-
-- `/autonomy` keeps durable objectives moving across process restarts with
-  persisted schedules, bounded retries, and completion gates that require
-  current command, EvalFly, or SpecSafe evidence rather than agent prose;
-- the broker-managed `pantheon-agentd` worker resumes file-backed OMP sessions
-  and uses leased, fenced command delivery to prevent stale workers from
-  advancing a run;
-- human-gated `/refinement` and `/python-skill` flows keep reusable improvements
-  approval-gated, attributable, reversible, and isolated; natural refinement
-  prepares a JSON preview from an agent-built candidate and activates only when
-  the interactive user submits `aprobar`.
-
-This is an original TypeScript implementation against OMP's public SDK—not a
-port or redistribution of Prime Agent. No Prime Agent source code is copied or
-vendored. Prime Agent is MIT-licensed, copyright Mario Zechner and Prime
-Intellect. See [ATTRIBUTION.md](./ATTRIBUTION.md) for the precise lineage and
-[the autonomy guide](./docs/autonomy.md) for usage and current capability
-limits.
 
 ## What this repo contains
 
@@ -80,12 +52,6 @@ limits.
   and PASS/FAIL/INCONCLUSIVE verdicts.
 - **Guardrails and lifecycle hooks** for todos, approvals, intent checks,
   comments, SpecSafe sessions/subagents, fallback audits, and artifact hygiene.
-- **Approval-gated refinement and isolated Python skills**: agents can prepare
-  a session-scoped JSON refinement preview from natural language, but only an
-  interactive `aprobar` applies its checked candidate. The ledger records
-  checksummed history and private rollback snapshots; Python uses
-  content-addressed environments, strict JSON contracts, resource bounds, and
-  a fail-closed network policy.
 - **Dogfooding:** this repo contains its own root `evals/` smoke suite that
   protects critical harness files and proves EvalFly works on the harness itself.
 
@@ -129,8 +95,6 @@ local, inspectable, hackable, and shaped around an eval-first engineering loop.
 | Evaluations | No built-in project-local eval evidence contract. | Adds EvalFly: `evals/`, deterministic suites, run JSON, markdown reports, trace import/normalization/audit, compare/report/summary commands, and templates. |
 | Enforcement | Normal harness/tool completion behavior. | Adds explicit local EvalFly enforcement: `evalfly enforce start` writes project-local state and the OMP stop gate blocks completion without fresh matching passing evidence. |
 | Branch QA | Whatever the user asks the agent to test. | Adds `agentic-branch-e2e`: freeze criteria first, run real user flows, capture UI/network/log/backend evidence, drive negative cases, and emit PASS/FAIL/INCONCLUSIVE. |
-| Verified autonomy | No Pantheon-specific durable objective runtime. | Adds opt-in `/autonomy`, native-goal and targeted-command gates, conditional exact EvalFly/SpecSafe adapters, broker-managed session resumption, leased/fenced command delivery, persisted scheduling, and bounded retries. |
-| Refinement/Python skills | General extension and tool mechanisms. | Adds `/refinement` and `/python-skill` commands, plus a natural-language refinement preview that only an interactive `aprobar` can activate; refinements remain append-only and rollback-capable, while Python execution uses exact pins and content-addressed environments. |
 | Safety boundary | OMP permissions and configured hooks. | Adds intent gates, approval gates, comment checks, SpecSafe hooks, EvalFly artifact hardening, privacy checks for sanitized traces, and non-global opt-in enforcement. |
 | Dogfooding | Not applicable. | The repo contains its own `evals/` smoke suite protecting critical harness files and tests that keep the suite synchronized. |
 
@@ -164,17 +128,6 @@ Implemented and verified in this bundle:
 - `agentic-branch-e2e` as the real-user branch verification protocol;
 - opt-in ADHD-friendly output mode via `/i-have-adhd`, `--adhd`, or an
   agent-local `.i-have-adhd-always` sentinel;
-- opt-in `/autonomy` commands and the `autonomy_gate` tool;
-- durable autonomy state, command queue, persisted scheduler generations,
-  lease/fencing recovery, and broker-managed `pantheon-agentd`;
-- human-gated `/refinement` lifecycle: agents can prepare a session-scoped JSON
-  preview from natural language, while only interactive `aprobar` records
-  approval and activation in append-only, checksummed history with private
-  rollback snapshots;
-- human-only `/python-skill` discovery/execution for manifest-validated isolated
-  Python skills with environment reuse;
-- capability-gated checkpoint and retained-agent contracts that fail honestly
-  when stock OMP 17.2.14 lacks the required public APIs.
 
 ## What it does not claim yet
 
@@ -190,8 +143,6 @@ evaluation platform. Today it does **not** automatically:
 - promote traces into eval cases automatically;
 - maintain hidden/dev eval splits;
 - prune or deduplicate stale eval debt.
-- provide public OMP 17.2.14 kernel export/import or retained-agent keep-alive
-  capabilities; Pantheon reports both as unsupported instead of using internals.
 
 Those are explicit roadmap items, not completed claims.
 
@@ -234,7 +185,7 @@ skills/<name>/SKILL.md  OMP skills and workflow protocols
 skills/evalfly/          EvalFly templates, CLI, and adoption docs
 evals/                  This repo's dogfood EvalFly smoke suite
 hooks/*.ts              OMP lifecycle hooks from Seshat/SpecSafe
-extensions/oh-my-omp/   verified autonomy, EvalFly, Honcho, lifecycle hooks
+extensions/oh-my-omp/   EvalFly, Honcho, skill routing, lifecycle hooks
 extensions/i-have-adhd/ opt-in session-persistent ADHD-friendly output mode
 test/                   integration/regression tests for the bundle
 docs/                   public overview, EvalFly guides, plans, port notes
@@ -263,9 +214,6 @@ explicitly activated per repo/session.
   description of the architecture, differentiators, issue flow, and roadmap.
 - [Telar integration boundary](./docs/telar-integration.md) — Pantheon's OMP
   Execution Adapter seam, ownership limits, deletion tests, and future plan.
-- [Verified autonomy](./docs/autonomy.md) — setup, commands, gates, worker and
-  scheduler recovery, state paths, refinement, Python skills, and capability
-  boundaries.
 - [EvalFly overview](./docs/evalfly/README.md) — current EvalFly modes, status,
   and boundaries.
 - [EvalFly modes](./docs/evalfly/modes.md) — normal, advisory, manual, local
