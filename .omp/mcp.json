@@ -4,6 +4,13 @@
     "linear": {
       "type": "http",
       "url": "https://mcp.linear.app/mcp"
+    },
+    "jevmem": {
+      "type": "stdio",
+      "command": "jevmem",
+      "args": [
+        "mcp"
+      ]
     }
   },
   "disabledServers": [

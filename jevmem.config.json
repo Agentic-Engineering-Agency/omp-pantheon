@@ -1,0 +1,66 @@
+{
+  "memoryFile": "JEVMEM.md",
+  "thresholds": {
+    "importanceMin": "useful",
+    "contentMin": 0.5,
+    "deadEndMin": 0.7,
+    "chitChatMax": 0.5,
+    "injectionMax": 0.5,
+    "metaMax": 0.5,
+    "contradictionMin": 0.7,
+    "staleBelow": 0.4,
+    "duplicateMin": 0.7,
+    "alwaysMin": 0.5,
+    "recallTopK": 5,
+    "recallMin": 0.05,
+    "recallChoiceMin": 0.03,
+    "recallRelevanceMin": 0.8
+  },
+  "jev": {
+    "model": "jev-1.13.0",
+    "timeoutMs": 2000,
+    "recallTimeoutMs": 1000,
+    "maxIdsPerCall": 200,
+    "maxRecallCandidates": 60,
+    "maxRecallLines": 250,
+    "usdPerMillionTokens": 0.042,
+    "cache": true,
+    "askAboutReply": true,
+    "zeroDataRetention": "auto"
+  },
+  "writer": {
+    "provider": "none",
+    "maxChars": 200,
+    "timeoutMs": 8000
+  },
+  "daemon": {
+    "enabled": true,
+    "idleMinutes": 30
+  },
+  "tiers": {
+    "mode": "auto",
+    "borderline": {
+      "kindNoulScope": "max",
+      "kindNoulLow": 0.3,
+      "kindNoulHigh": 0.7,
+      "kindConfidenceMin": 0.6,
+      "contradictionMin": 1.01,
+      "importanceConfidenceMin": 0.5,
+      "injectionLow": 0.3,
+      "injectionHigh": 0.7,
+      "sureSkipChitChatMin": 0.9
+    },
+    "tier2ExamplesPerSide": 1
+  },
+  "guard": {
+    "mode": "ask",
+    "askMin": 0.5,
+    "blockMin": 0.9,
+    "budgetMs": 2000,
+    "maxCandidates": 3
+  },
+  "alwaysOn": {
+    "mode": "always",
+    "maxLines": 40
+  }
+}
