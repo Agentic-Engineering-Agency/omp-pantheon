@@ -1,1 +1,11 @@
-extends: .github-private
+merge_queue:
+  mode: serial
+  max_parallel_checks: 1
+
+queue_rules:
+  - name: default
+    queue_conditions:
+      - base = main
+      - head != cx/mergify-smoke-hold
+    merge_conditions:
+      - check-success = verify
