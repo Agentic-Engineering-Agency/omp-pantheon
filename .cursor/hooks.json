@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "sh .cursor/hooks/jevmem-hook.sh sessionStart",
+        "timeout": 5
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "sh .cursor/hooks/jevmem-hook.sh beforeSubmitPrompt",
+        "timeout": 5
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "sh .cursor/hooks/jevmem-hook.sh afterAgentResponse",
+        "timeout": 5
+      }
+    ],
+    "stop": [
+      {
+        "command": "sh .cursor/hooks/jevmem-hook.sh stop",
+        "timeout": 20
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "sh .cursor/hooks/jevmem-hook.sh sessionEnd",
+        "timeout": 20
+      }
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "jevmem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "jevmem",
+        "mcp"
+      ],
+      "env": {
+        "TYPESAFE_API_KEY": "${env:TYPESAFE_API_KEY}"
+      }
+    }
+  }
+}
