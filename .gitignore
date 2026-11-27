@@ -36,5 +36,6 @@ secrets.json
 .pi/evalfly/raw/
 .pi/evalfly/enforcement.json
 /.omp/skills
+/.agents/skills
 .jevmem/
 .cursor/hooks/state/
