@@ -74,3 +74,27 @@ Durable project memory lives in `JEVMEM.md` (one line per decision, constraint, 
 - If something contradicts an existing memory, add the new line and say which memory it replaces.
 - Never add greetings, questions, or things already obvious from the code.
 - Never add, edit or remove lines in `JEVMEM.md` directly: record memories only through `add_memory` (with `jevmem watch` running, jevmem also records them from the session on its own).
+
+## Bounded task execution
+
+Within the existing instruction hierarchy, authorization, repository gates, and review/resource
+budgets, apply the following to substantial work. Existing stricter or equivalent rules remain
+authoritative; this section fills gaps rather than creating a second workflow.
+
+- Inspect the baseline and name the problem, observable acceptance criteria, allowed scope,
+  dependencies, and stopping condition. Carry authorized work through appropriate verification
+  and follow-through; ask only for a missing required decision or authorization.
+- Use `working`, `input-needed`, `review-ready`, `failed`, and `complete` when reporting task
+  state. `review-ready` requires a concrete artifact or diff and evidence; `complete` requires
+  the accepted outcome and applicable gates. Translate these labels to existing tracker states.
+- Establish writer ownership and preserve dirty work. Use supported isolation or serialize
+  conflicting writes. Independent review follows existing policy and risk, with the scope and
+  revision frozen; self-checks and worker reports are not independent review.
+- Reuse existing receipts: record actual harness/model and session when available, immutable
+  commit or artifact hash, checks and outcomes, review verdict, and unresolved limits. Mark
+  unknowns and distinguish observed evidence from reports. Preserve prior receipts; exclude
+  secrets, private prompts, and reasoning.
+- Observe relevant cost/usage and CI signals within current caps. Retry only within authorized
+  scope and remaining budgets. On a real blocker or exhausted limit, preserve the work and
+  report the exact target, cause, and next permitted step. Add no recurring monitor, endless
+  review loop, automatic approval, or automatic merge.
